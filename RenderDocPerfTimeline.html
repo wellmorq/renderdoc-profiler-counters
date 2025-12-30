@@ -1,0 +1,837 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RenderDoc Perf Timeline</title>
+    <style>
+        :root {
+            --header-height: 60px;
+            --footer-height: 40px;
+            --splitter-height: 8px;
+            --row-height: 24px;
+            --bar-section-width: 60%; 
+            --font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+
+            /* Tokyo Night Light Theme */
+            --bg-color: #d5d6db;
+            --text-color: #343b58;
+            --panel-bg: #e1e2e7;
+            --border-color: #9699a3;
+            --accent-color: #3d59a1;
+            --timeline-track-bg: #d5d6db;
+            --timeline-block-hover: rgba(61, 89, 161, 0.1);
+            --detail-val-bg: rgba(255, 255, 255, 0.5);
+        }
+
+        [data-theme="dark"] {
+            /* Dracula Theme */
+            --bg-color: #282a36;
+            --text-color: #f8f8f2;
+            --panel-bg: #21222c;
+            --border-color: #6272a4;
+            --accent-color: #bd93f9;
+            --timeline-track-bg: #282a36;
+            --timeline-block-hover: rgba(189, 147, 249, 0.2);
+            --detail-val-bg: rgba(0, 0, 0, 0.2);
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: var(--font-family); background-color: var(--bg-color); color: var(--text-color); height: 100vh; display: flex; flex-direction: column; overflow: hidden; transition: background 0.3s, color 0.3s; }
+
+        header {
+            height: var(--header-height); background-color: var(--panel-bg); border-bottom: 1px solid var(--border-color);
+            display: flex; align-items: center; justify-content: space-between; padding: 0 20px; flex-shrink: 0; z-index: 10;
+        }
+
+        #drop-zones-container { display: flex; gap: 10px; flex: 1; align-items: center; }
+        #drop-zones { display: flex; gap: 20px; flex: 1; }
+        .file-drop {
+            flex: 1; height: 36px; border: 1px dashed var(--border-color); border-radius: 6px;
+            display: flex; align-items: center; justify-content: center; font-size: 12px; color: #888;
+            cursor: pointer; position: relative; background: var(--bg-color); transition: all 0.2s;
+        }
+        .file-drop:hover { border-color: var(--accent-color); }
+        .file-drop.active { border-color: var(--accent-color); background-color: var(--timeline-block-hover); }
+        .file-drop.loaded { border-style: solid; color: var(--text-color); border-color: var(--accent-color); }
+        .file-drop input { display: none; }
+        .file-drop .remove-file { 
+            position: absolute; right: 5px; top: 50%; transform: translateY(-50%); 
+            cursor: pointer; display: none; padding: 4px; font-weight: bold;
+        }
+        .file-drop.loaded .remove-file { display: block; }
+
+        .icon-btn {
+            background: transparent; border: none; font-size: 18px; cursor: pointer; color: var(--text-color);
+            width: 36px; height: 36px; display: flex; align-items: center; justify-content: center;
+            border-radius: 50%; transition: background-color 0.2s, transform 0.2s; margin-left: 20px;
+        }
+        .icon-btn:hover { background-color: var(--timeline-block-hover); }
+        .icon-btn:active { transform: scale(0.9); }
+
+        #main-container { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+        #timeline-wrapper { flex: 1; overflow: hidden; display: flex; flex-direction: column; position: relative; min-height: 200px; }
+        
+        #timeline-controls { 
+            padding: 10px 20px; background-color: var(--bg-color); border-bottom: 1px solid var(--border-color); 
+            display: flex; align-items: center; justify-content: space-between; font-size: 13px; 
+        }
+        .control-group { display: flex; align-items: center; gap: 15px; }
+        .zoom-label { display: flex; align-items: center; gap: 8px; font-weight: 500; font-variant-numeric: tabular-nums; }
+        select { padding: 4px 8px; border-radius: 4px; border: 1px solid var(--border-color); background: var(--panel-bg); color: var(--text-color); outline: none; }
+        
+        #timeline-scroll-area { flex: 1; overflow: auto; position: relative; padding: 10px 0; }
+        #timeline-content { position: relative; height: 100%; transform-origin: 0 0; margin: 0 auto; }
+
+        .event-block {
+            position: absolute; height: var(--row-height); background-color: var(--accent-color); border-radius: 1px;
+            box-shadow: inset 0 0 0 1px rgba(0,0,0,0.15); color: white; font-size: 10px;
+            display: flex; align-items: center; padding: 0 4px; cursor: pointer; overflow: hidden; user-select: none;
+            transition: opacity 0.2s;
+        }
+        .event-block.zero-val {
+            background-color: var(--text-color); border: none; opacity: 0.2; width: 1px !important; padding: 0; border-radius: 0;
+        }
+        .event-block.zero-val:hover { 
+            opacity: 1; background-color: var(--accent-color); z-index: 10; width: 3px !important; transform: translateX(-1px);
+        }
+        .event-block:hover { filter: brightness(1.1); z-index: 2; }
+        .event-block span { text-overflow: ellipsis; overflow: hidden; white-space: nowrap; width: 100%; }
+
+        #splitter { 
+            height: var(--splitter-height); background-color: var(--border-color); cursor: row-resize; z-index: 100; 
+            display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+        }
+        #splitter::after { content: ""; width: 40px; height: 4px; background-color: #888; border-radius: 2px; }
+
+        #details-panel { 
+            height: 300px; background-color: var(--panel-bg); border-top: 1px solid var(--border-color); 
+            display: flex; flex-direction: column; overflow: hidden; 
+        }
+        #details-header { 
+            padding: 12px 20px; border-bottom: 1px solid var(--border-color); 
+            background-color: var(--bg-color); flex-shrink: 0;
+        }
+        .details-title-text { font-weight: 700; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+        .tabs-bar { 
+            display: flex; padding: 0 20px; border-bottom: 1px solid var(--border-color); 
+            background-color: var(--panel-bg); flex-shrink: 0; height: 32px; 
+            align-items: center; justify-content: space-between;
+        }
+        #tabs-container { display: flex; gap: 20px; height: 100%; }
+        .tab-button {
+            padding: 0; height: 100%; border: none; background: transparent; color: var(--text-color);
+            cursor: pointer; font-size: 12px; font-weight: 500; opacity: 0.6;
+            display: flex; align-items: center; position: relative; transition: all 0.2s;
+        }
+        .tab-button:hover { opacity: 0.9; }
+        .tab-button.active { opacity: 1; font-weight: 600; color: var(--accent-color); }
+        .tab-button.active::after {
+            content: ''; position: absolute; bottom: -1px; left: 0; width: 100%; height: 2px; background-color: var(--accent-color);
+        }
+        #add-plugin-btn {
+            width: 24px; height: 24px; border-radius: 4px; border: 1px dashed var(--border-color);
+            background: transparent; color: var(--text-color); cursor: pointer;
+            display: flex; align-items: center; justify-content: center; font-size: 16px; opacity: 0.6; transition: all 0.2s;
+        }
+        #add-plugin-btn:hover { opacity: 1; border-color: var(--accent-color); color: var(--accent-color); background: var(--timeline-block-hover); }
+
+        #details-body { flex: 1; overflow: hidden; position: relative; }
+        .tab-content { 
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%; 
+            display: none; flex-direction: column; overflow-y: auto; padding: 20px; 
+        }
+        .tab-content.active { display: flex; }
+
+        .metric-row { 
+            display: flex; align-items: center; margin-bottom: 2px; font-size: 12px; gap: 15px; 
+            padding: 4px 8px; border-radius: 4px; flex-shrink: 0;
+        }
+        .metric-row:nth-child(even) { background-color: rgba(128,128,128,0.05); }
+        .metric-row:hover { background-color: var(--timeline-block-hover); }
+        
+        .metric-name { width: 220px; flex-shrink: 0; overflow: hidden; text-overflow: ellipsis; }
+        .metric-val-current { 
+            width: 130px; font-weight: 700; text-align: left; flex-shrink: 0;
+            background: var(--detail-val-bg); padding: 2px 6px; border-radius: 4px; font-family: monospace;
+            white-space: nowrap;
+        }
+        .metric-bar-wrapper { flex: 1; display: flex; align-items: center; gap: 10px; max-width: var(--bar-section-width); }
+        .metric-val-min, .metric-val-max { width: 90px; text-align: right; color: #888; font-size: 10px; }
+        .metric-val-min { text-align: right; }
+        
+        .metric-bar-container { flex: 1; height: 12px; background: var(--bg-color); border-radius: 3px; position: relative; }
+        .metric-bar { height: 100%; background-color: var(--accent-color); border-radius: 3px; min-width: 2px; }
+
+        footer { 
+            height: var(--footer-height); display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; 
+            padding: 0 20px; font-size: 11px; background-color: var(--panel-bg); border-top: 1px solid var(--border-color); flex-shrink: 0;
+        }
+        .footer-title { grid-column: 2; font-size: 14px; font-weight: 600; letter-spacing: 0.5px; text-transform: uppercase; }
+        
+        .hidden { display: none !important; }
+        .placeholder-text { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: #888; }
+    </style>
+</head>
+<body>
+
+<header>
+    <div id="drop-zones-container">
+        <div id="drop-zones">
+            <div class="file-drop" id="drop-events" onclick="document.getElementById('input-events').click()">
+                <span class="label">Load events.txt</span>
+                <input type="file" id="input-events" accept=".txt">
+                <div class="remove-file" title="Remove File">✕</div>
+            </div>
+            <div class="file-drop" id="drop-counters" onclick="document.getElementById('input-counters').click()">
+                <span class="label">Load counters.csv</span>
+                <input type="file" id="input-counters" accept=".csv">
+                <div class="remove-file" title="Remove File">✕</div>
+            </div>
+        </div>
+    </div>
+    <button id="theme-toggle" class="icon-btn" title="Switch Theme">☀</button>
+</header>
+
+<div id="main-container">
+    <div id="timeline-wrapper">
+        <div class="placeholder-text" id="timeline-placeholder">Load both files to view timeline</div>
+        <div id="timeline-controls" class="hidden">
+            <div class="control-group">
+                <label>Main Counter: <select id="main-counter-select"></select></label>
+                <label style="cursor:pointer; display:flex; align-items:center; gap:5px;">
+                    <input type="checkbox" id="show-hidden"> Show Hidden
+                </label>
+            </div>
+            <div class="control-group">
+                <span class="zoom-label">Zoom: <span id="zoom-val">100%</span></span>
+                <button id="reset-zoom" title="Reset Zoom to 100%" style="background:var(--panel-bg);border:1px solid var(--border-color);color:var(--text-color);border-radius:4px;cursor:pointer;padding:2px 6px;font-size:11px;margin-left:8px;">Reset</button>
+            </div>
+        </div>
+        <div id="timeline-scroll-area" class="hidden"><div id="timeline-content"></div></div>
+    </div>
+    <div id="splitter" class="hidden"></div>
+    <div id="details-panel" class="hidden">
+        <div id="details-header">
+            <span id="details-title" class="details-title-text">Details</span>
+        </div>
+        <div class="tabs-bar">
+            <div id="tabs-container"></div>
+            <button id="add-plugin-btn" title="Load Plugin (.js)">+</button>
+            <input type="file" id="plugin-input" accept=".js" style="display:none">
+        </div>
+        <div id="details-body"></div>
+    </div>
+</div>
+
+<footer>
+    <div></div>
+    <div class="footer-title">RenderDoc Perf Timeline</div>
+    <div style="text-align:right">Created by <a href="https://t.me/shiko_q" target="_blank" style="color: inherit; text-decoration: none; font-weight: bold;">@shiko_q</a></div>
+</footer>
+
+<script>
+    const CONFIG = {
+        ROW_HEIGHT: 26, BAR_HEIGHT: 24,
+        MIN_ZOOM: 0.1, MAX_ZOOM: 50
+    };
+
+    const state = {
+        events: null, counters: null, headers: [], counterMinMax: {},
+        mainCounter: 'Duration (ms)', showHidden: false, 
+        files: { events: null, counters: null }, zoom: 1,
+        selectedNode: null, correlations: {}
+    };
+    const collapsedNodes = new Set();
+
+    const els = {
+        dropEvents: document.getElementById('drop-events'), 
+        dropCounters: document.getElementById('drop-counters'),
+        inputEvents: document.getElementById('input-events'), 
+        inputCounters: document.getElementById('input-counters'),
+        timelinePlaceholder: document.getElementById('timeline-placeholder'), 
+        timelineControls: document.getElementById('timeline-controls'),
+        timelineScrollArea: document.getElementById('timeline-scroll-area'), 
+        timelineContent: document.getElementById('timeline-content'),
+        mainCounterSelect: document.getElementById('main-counter-select'), 
+        showHidden: document.getElementById('show-hidden'),
+        splitter: document.getElementById('splitter'), 
+        detailsPanel: document.getElementById('details-panel'),
+        detailsTitle: document.getElementById('details-title'), 
+        tabsContainer: document.getElementById('tabs-container'),
+        detailsBody: document.getElementById('details-body'),
+        addPluginBtn: document.getElementById('add-plugin-btn'),
+        pluginInput: document.getElementById('plugin-input'),
+        themeToggle: document.getElementById('theme-toggle'),
+        zoomVal: document.getElementById('zoom-val'), 
+        resetZoom: document.getElementById('reset-zoom')
+    };
+
+    // --- SHARED UTILITIES (DRY) ---
+    const CommonUtils = {
+        isNumber: (x) => typeof x === 'number' && Number.isFinite(x),
+        clamp01: (x) => !Number.isFinite(x) ? 0 : (x < 0 ? 0 : (x > 1 ? 1 : x)),
+        safeDiv: (a, b, f=0) => (!Number.isFinite(a) || !Number.isFinite(b) || b === 0) ? f : a / b,
+        
+        fmtNum: (n) => (typeof n === 'number') ? n.toLocaleString('en-US', { maximumFractionDigits: 3 }) : n,
+        fmtInt: (x) => (typeof x === 'number' && Number.isFinite(x)) ? Math.round(x).toLocaleString('en-US') : 'n/a',
+        fmtPct: (x) => (typeof x === 'number' && Number.isFinite(x)) ? x.toFixed(1) + '%' : 'n/a',
+        fmtNs: (ns) => (typeof ns === 'number' && Number.isFinite(ns)) ? ns.toLocaleString('en-US', { maximumFractionDigits: 3 }) + ' ns' : 'n/a',
+        fmtRatio: (x) => (typeof x === 'number' && Number.isFinite(x)) ? x.toFixed(2) + '×' : 'n/a',
+        
+        fmtBytes: (x) => {
+            if (typeof x !== 'number' || !Number.isFinite(x)) return 'n/a';
+            const abs = Math.abs(x);
+            const KB = 1024, MB = KB * 1024, GB = MB * 1024;
+            if (abs >= GB) return (x / GB).toFixed(2) + ' GB';
+            if (abs >= MB) return (x / MB).toFixed(2) + ' MB';
+            if (abs >= KB) return (x / KB).toFixed(2) + ' KB';
+            return Math.round(x).toLocaleString('en-US') + ' B';
+        },
+        
+        fmtGBps: (bytes, timeNs) => {
+             if (typeof bytes !== 'number' || typeof timeNs !== 'number' || timeNs <= 0) return 'n/a';
+             return ((bytes * 1e9 / timeNs) / (1024*1024*1024)).toFixed(2) + ' GB/s';
+        },
+
+        resolveMetric: (headers, metricDef) => {
+            const variants = Array.isArray(metricDef) ? metricDef : [metricDef];
+            for (const name of variants) {
+                if (headers.includes(name)) return name;
+                const match = headers.find(h => h.startsWith(name + ' ') || h.startsWith(name + '('));
+                if (match) return match;
+            }
+            return null;
+        },
+
+        getAgg: (agg, headers, metricDef) => {
+             const name = CommonUtils.resolveMetric(headers, metricDef);
+             const v = name ? agg[name] : 0;
+             return (typeof v === 'number' && Number.isFinite(v)) ? v : 0;
+        },
+
+        createMetricRow: (label, value, contextHtml, title = '') => {
+            const row = document.createElement('div');
+            row.className = 'metric-row';
+            row.innerHTML = `<div class="metric-name" title="${title || label}">${label}</div><div class="metric-val-current">${CommonUtils.fmtNum(value)}</div>${contextHtml}`;
+            return row;
+        },
+
+        createBar: (val, max, color) => {
+            const percent = (max > 0) ? Math.min((val / max) * 100, 100) : 0;
+            return `<div class="metric-bar-wrapper"><div class="metric-val-min">0</div><div class="metric-bar-container"><div class="metric-bar" style="width:${percent}%;background-color:${color||'#888'}"></div></div><div class="metric-val-max">${CommonUtils.fmtNum(max)}</div></div>`;
+        },
+        
+        selectNode: selectNode // Passed reference
+    };
+
+    // --- PLUGIN SYSTEM ---
+    const PluginManager = {
+        plugins: [],
+        activeTabId: null,
+
+        register(plugin) {
+            console.log(`Plugin Registered: ${plugin.name}`);
+            const idx = this.plugins.findIndex(p => p.id === plugin.id);
+            if (idx !== -1) this.plugins[idx] = plugin;
+            else this.plugins.push(plugin);
+            
+            this.plugins.sort((a,b) => (a.order || 999) - (b.order || 999));
+            this.rebuildTabsUI();
+            
+            if (state.selectedNode) {
+                selectNode(state.selectedNode);
+                if (!this.activeTabId || this.activeTabId === plugin.id) this.switchTab(plugin.id); 
+            }
+        },
+
+        rebuildTabsUI() {
+            els.tabsContainer.innerHTML = '';
+            els.detailsBody.innerHTML = '';
+            
+            if (!this.activeTabId && this.plugins.length > 0) {
+                this.activeTabId = this.plugins[0].id;
+            }
+
+            this.plugins.forEach(p => {
+                const btn = document.createElement('button');
+                btn.className = `tab-button ${p.id === this.activeTabId ? 'active' : ''}`;
+                btn.textContent = p.name;
+                btn.title = p.description || '';
+                btn.onclick = () => this.switchTab(p.id);
+                els.tabsContainer.appendChild(btn);
+
+                const content = document.createElement('div');
+                content.id = `plugin-content-${p.id}`;
+                content.className = `tab-content ${p.id === this.activeTabId ? 'active' : ''}`;
+                els.detailsBody.appendChild(content);
+            });
+        },
+
+        switchTab(id) {
+            this.activeTabId = id;
+            Array.from(els.tabsContainer.children).forEach((btn, idx) => {
+                btn.classList.toggle('active', this.plugins[idx].id === id);
+            });
+            Array.from(els.detailsBody.children).forEach(div => {
+                div.classList.toggle('active', div.id === `plugin-content-${id}`);
+            });
+        },
+
+        renderCurrentNode(node, aggData) {
+            if (!node) return;
+            const context = {
+                node: node, agg: aggData, state: state,
+                utils: CommonUtils
+            };
+
+            this.plugins.forEach(p => {
+                const container = document.getElementById(`plugin-content-${p.id}`);
+                if (!container) return;
+                container.innerHTML = ''; 
+                try {
+                    p.render(container, context);
+                } catch (e) {
+                    container.innerHTML = `<div style="color:red;padding:10px">Plugin Error: ${e.message}</div>`;
+                    console.error(e);
+                }
+            });
+        }
+    };
+    
+    window.PluginManager = PluginManager;
+
+    function init() {
+        const theme = localStorage.getItem('theme') || 'dark';
+        setTheme(theme);
+        els.themeToggle.onclick = () => setTheme(document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark');
+        
+        // Plugin Loading Logic
+        const loadPluginFromFile = (file) => {
+             const reader = new FileReader();
+             reader.onload = (ev) => {
+                 try {
+                     const script = document.createElement('script');
+                     script.textContent = ev.target.result;
+                     document.body.appendChild(script);
+                     console.log(`Loaded plugin from ${file.name}`);
+                 } catch(err) { alert('Error loading plugin: ' + err); }
+             };
+             reader.readAsText(file);
+        };
+
+        // Plugin Drag & Drop Support
+        document.addEventListener('dragover', e => e.preventDefault());
+        document.addEventListener('drop', e => {
+            const files = Array.from(e.dataTransfer.files);
+            const pluginFile = files.find(f => f.name.endsWith('.js'));
+            
+            if (pluginFile) {
+                e.preventDefault(); e.stopPropagation();
+                loadPluginFromFile(pluginFile);
+                return;
+            }
+        }, true);
+
+        // Manual Plugin Load
+        els.addPluginBtn.onclick = () => els.pluginInput.click();
+        els.pluginInput.onchange = (e) => {
+            if (e.target.files.length > 0) {
+                loadPluginFromFile(e.target.files[0]);
+                e.target.value = ''; 
+            }
+        };
+
+        const handle = (e, type) => { if (e.target.files.length) handleFile(e.target.files[0], type); };
+        els.inputEvents.onchange = (e) => handle(e, 'events');
+        els.inputCounters.onchange = (e) => handle(e, 'counters');
+        
+        const setupDrop = (zone, type) => {
+            zone.ondragover = (e) => { e.preventDefault(); zone.classList.add('active'); };
+            zone.ondragleave = () => zone.classList.remove('active');
+            zone.ondrop = (e) => { 
+                e.preventDefault(); zone.classList.remove('active'); 
+                if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0], type); 
+            };
+        };
+        setupDrop(els.dropEvents, 'events'); setupDrop(els.dropCounters, 'counters');
+
+        document.querySelectorAll('.remove-file').forEach(btn => btn.onclick = (e) => {
+            e.stopPropagation(); const type = e.target.parentElement.id.includes('events') ? 'events' : 'counters';
+            state.files[type] = null; state[type] = null;
+            e.target.parentElement.classList.remove('loaded');
+            e.target.parentElement.querySelector('.label').textContent = `Load ${type === 'events' ? 'events.txt' : 'counters.csv'}`;
+            e.target.parentElement.querySelector('input').value = '';
+            updateUIState();
+        });
+
+        els.mainCounterSelect.onchange = (e) => { state.mainCounter = e.target.value; calcCorrelations(); renderTimeline(); updateUrlParams(); };
+        els.showHidden.onchange = (e) => { state.showHidden = e.target.checked; renderTimeline(); updateUrlParams(); };
+        els.resetZoom.onclick = () => { state.zoom = 1; updateZoomDisplay(); };
+        
+        els.timelineScrollArea.addEventListener('wheel', (e) => {
+            e.preventDefault();
+            const rect = els.timelineScrollArea.getBoundingClientRect();
+            const mouseX = e.clientX - rect.left;
+            const scrollX = els.timelineScrollArea.scrollLeft;
+            const contentWidth = els.timelineContent.offsetWidth; 
+            const mouseRatio = (scrollX + mouseX) / contentWidth;
+            
+            const dir = e.deltaY < 0 ? 1 : -1;
+            const step = 0.05; 
+            const newZoom = Math.min(Math.max(state.zoom + (dir * step), CONFIG.MIN_ZOOM), CONFIG.MAX_ZOOM);
+
+            if (newZoom !== state.zoom) {
+                state.zoom = newZoom;
+                updateZoomDisplay();
+                const newContentWidth = els.timelineContent.offsetWidth;
+                if (newContentWidth < rect.width) els.timelineScrollArea.scrollLeft = 0;
+                else els.timelineScrollArea.scrollLeft = (mouseRatio * newContentWidth) - mouseX;
+            }
+        }, { passive: false });
+
+        setupSplitter(); checkUrlParams();
+        registerDefaultPlugins();
+    }
+
+    function setTheme(mode) {
+        document.documentElement.setAttribute('data-theme', mode);
+        localStorage.setItem('theme', mode);
+        els.themeToggle.innerHTML = mode === 'dark' ? '☀' : '☾';
+    }
+    
+    function updateZoomDisplay() {
+        els.zoomVal.textContent = `${Math.round(state.zoom * 100)}%`;
+        els.timelineContent.style.width = `${state.zoom * 100}%`;
+    }
+
+    function handleFile(file, type) {
+        const name = file.name.toLowerCase();
+        if (type === 'events' && !name.endsWith('.txt')) { alert('Please select a .txt file for Events.'); return; }
+        if (type === 'counters' && !name.endsWith('.csv')) { alert('Please select a .csv file for Counters.'); return; }
+        const reader = new FileReader();
+        reader.onload = (e) => loadContent(e.target.result, type, file.name);
+        reader.readAsText(file);
+    }
+
+    function loadContent(content, type, name) {
+        if (type === 'events') parseEvents(content); else parseCounters(content);
+        const zone = type === 'events' ? els.dropEvents : els.dropCounters;
+        zone.classList.add('loaded'); zone.querySelector('.label').textContent = name;
+        state.files[type] = name;
+        updateUIState();
+    }
+
+    function updateUIState() {
+        const ok = state.events && state.counters;
+        els.timelinePlaceholder.classList.toggle('hidden', ok);
+        [els.timelineControls, els.timelineScrollArea, els.splitter, els.detailsPanel].forEach(el => el.classList.toggle('hidden', !ok));
+        if (ok) { if (!els.mainCounterSelect.options.length) populateCounterSelect(); renderTimeline(); }
+    }
+
+    function parseEvents(text) {
+        const lines = text.split(/\r?\n/), roots = [], stack = [];
+        let start = lines.findIndex(l => l.trim().startsWith('---')) + 1;
+        for (let i = start; i < lines.length; i++) {
+            const parts = lines[i].split('|'); if (parts.length < 2) continue;
+            const eid = parseInt(parts[0].trim()); if (isNaN(eid)) continue;
+            const match = parts[1].match(/[-=>\\]/); if (!match) continue;
+            const node = {eid, name: parts[1].substring(match.index).replace(/^[-=>\\s]+/,'').trim(), children: [], level: match.index };
+            while (stack.length > 0 && stack[stack.length - 1].level >= node.level) stack.pop();
+            if (stack.length > 0) stack[stack.length - 1].children.push(node); else roots.push(node);
+            stack.push(node);
+        }
+        state.events = roots;
+    }
+
+    function parseCounters(text) {
+        const lines = text.split(/\r?\n/); if (lines.length < 2) return;
+        const headers = lines[0].split(',').map(h => h.trim());
+        state.headers = headers.filter(h => h !== 'EID'); state.counters = new Map();
+        state.headers.forEach(h => state.counterMinMax[h] = { min: Infinity, max: -Infinity });
+        for (let i = 1; i < lines.length; i++) {
+            const vals = lines[i].split(','), eid = parseInt(vals[0]); if (isNaN(eid)) continue;
+            const metrics = {};
+            vals.forEach((v, idx) => {
+                if (idx === 0) return; const h = headers[idx], n = parseFloat(v) || 0; metrics[h] = n;
+                if (n < state.counterMinMax[h].min) state.counterMinMax[h].min = n;
+                if (n > state.counterMinMax[h].max) state.counterMinMax[h].max = n;
+            });
+            state.counters.set(eid, metrics);
+        }
+        if (!state.headers.includes(state.mainCounter)) {
+            state.mainCounter = state.headers.find(h => /time|duration/i.test(h)) || state.headers[0];
+        }
+        calcCorrelations();
+    }
+
+    function calcCorrelations() {
+        if (!state.counters || state.counters.size === 0) return;
+        const n = state.counters.size;
+        const mainVals = [], keys = state.headers.filter(h => h !== state.mainCounter);
+        state.counters.forEach(m => mainVals.push(m[state.mainCounter] || 0));
+        const sumMain = mainVals.reduce((a,b)=>a+b,0);
+        const avgMain = sumMain / n;
+        
+        // Pearson correlation
+        const correlations = {};
+        keys.forEach(key => {
+            let num = 0, den1 = 0, den2 = 0;
+            let vals = [];
+            state.counters.forEach(m => vals.push(m[key] || 0));
+            const avgKey = vals.reduce((a,b)=>a+b,0) / n;
+            
+            for(let i=0; i<n; i++) {
+                const dx = mainVals[i] - avgMain;
+                const dy = vals[i] - avgKey;
+                num += dx * dy;
+                den1 += dx * dx;
+                den2 += dy * dy;
+            }
+            correlations[key] = (den1 === 0 || den2 === 0) ? 0 : num / Math.sqrt(den1 * den2);
+        });
+        state.correlations = correlations;
+        if(state.selectedNode) selectNode(state.selectedNode);
+    }
+
+    function populateCounterSelect() {
+        els.mainCounterSelect.innerHTML = state.headers.map(h => `<option value="${h}" ${h===state.mainCounter?'selected':''}>${h}</option>`).join('');
+    }
+
+    function renderTimeline() {
+        const container = els.timelineContent; container.innerHTML = '';
+        if (!state.events || !state.counters) return;
+
+        const getRawVal = (eid) => {
+            const m = state.counters.get(eid);
+            return m ? (m[state.mainCounter] || 0) : 0;
+        };
+
+        const calc = (node) => {
+            if (!node.children.length) {
+                const val = getRawVal(node.eid);
+                return node._val = val, node._leaf = true, val;
+            }
+            node._val = node.children.reduce((acc, c) => acc + calc(c), 0);
+            return node._leaf = false, node._val;
+        };
+
+        let realTotal = state.events.reduce((acc, r) => acc + calc(r), 0) || 1;
+        const list = []; let maxD = 0;
+        const EPSILON = realTotal * 0.001;
+
+        const flatten = (node, offset, d) => {
+            let v = node._val;
+            if (v <= 0 && !state.showHidden) return offset;
+            const isZero = v <= 0;
+            if (isZero && node._leaf) {
+                v = EPSILON;
+                list.push({ node, offset, d, isZero: true, width: v });
+                return offset + v;
+            }
+            const startOffset = offset;
+            let parentWidth = isZero ? 0 : v;
+            const parentItem = { node, offset, d, isZero, width: parentWidth };
+            list.push(parentItem);
+            if (d > maxD) maxD = d;
+            if (collapsedNodes.has(node.eid)) {
+                parentItem.width = isZero ? EPSILON : v;
+                return offset + parentItem.width;
+            }
+            let currentOffset = offset;
+            node.children.forEach(c => currentOffset = flatten(c, currentOffset, d + 1));
+            const childrenSpan = currentOffset - startOffset;
+            parentItem.width = Math.max(isZero ? 0 : v, childrenSpan);
+            if (isZero && parentItem.width <= 0) parentItem.width = EPSILON;
+            return startOffset + parentItem.width;
+        };
+
+        let go = 0; state.events.forEach(r => go = flatten(r, go, 0));
+        const visualTotal = go || 1;
+        container.style.height = `${(maxD + 1) * CONFIG.ROW_HEIGHT}px`; 
+        updateZoomDisplay();
+        
+        list.forEach(item => {
+            const el = document.createElement('div'); el.className = 'event-block';
+            if (item.isZero) el.classList.add('zero-val');
+            else { el.style.backgroundColor = stringToColor(item.node.name); }
+            el.style.cssText += `top:${item.d * CONFIG.ROW_HEIGHT}px; height:${CONFIG.BAR_HEIGHT}px; left:${(item.offset/visualTotal)*100}%; width:${(item.width/visualTotal)*100}%`;
+            el.title = `${item.node.name} (${item.node._val.toFixed(4)})`;
+            el.innerHTML = `${(item.node.children.length > 0) ? `<span class="toggle-icon" style="margin-right:4px;font-size:10px">${collapsedNodes.has(item.node.eid)?'▶':'▼'}</span>` : ''}<span>${item.node.name}</span>`;
+            el.onclick = (e) => { e.stopPropagation(); selectNode(item.node); };
+            const toggle = el.querySelector('.toggle-icon');
+            if (toggle) toggle.onclick = (e) => { e.stopPropagation(); collapsedNodes.has(item.node.eid) ? collapsedNodes.delete(item.node.eid) : collapsedNodes.add(item.node.eid); renderTimeline(); };
+            container.appendChild(el);
+        });
+    }
+
+    function stringToColor(str) {
+        let hash = 0; for (let i = 0; i < str.length; i++) hash = str.charCodeAt(i) + ((hash << 5) - hash);
+        return '#' + (hash & 0x00FFFFFF).toString(16).toUpperCase().padStart(6, '0');
+    }
+
+    function selectNode(node) {
+        state.selectedNode = node;
+        els.detailsTitle.textContent = `${node.name} (EID: ${node.eid})`;
+        
+        // Aggregate Data
+        const getLeaves = (n, l = []) => !n.children.length ? (l.push(n), l) : (n.children.forEach(c => getLeaves(c, l)), l);
+        const leaves = getLeaves(node);
+        const agg = {};
+        state.headers.forEach(h => agg[h] = 0);
+        leaves.forEach(leaf => { const m = state.counters.get(leaf.eid); if (m) state.headers.forEach(h => agg[h] += m[h] || 0); });
+        
+        PluginManager.renderCurrentNode(node, agg);
+    }
+
+    function setupSplitter() {
+        let drag = false, sy, sh;
+        els.splitter.onmousedown = (e) => { 
+            drag = true; sy = e.clientY; sh = els.detailsPanel.offsetHeight; 
+            document.body.style.cursor = 'row-resize'; 
+            document.body.style.userSelect = 'none'; 
+        };
+        document.addEventListener('mousemove', (e) => { 
+            if (!drag) return; 
+            const h = sh + (sy - e.clientY); 
+            if (h > 50 && h < window.innerHeight - 100) els.detailsPanel.style.height = h + 'px'; 
+        });
+        document.addEventListener('mouseup', () => {
+            if (drag) {
+                drag = false;
+                document.body.style.cursor = ''; 
+                document.body.style.userSelect = ''; 
+            }
+        });
+    }
+
+    function checkUrlParams() {
+        const p = new URLSearchParams(window.location.search);
+        if (p.has('counter')) state.mainCounter = p.get('counter');
+        if (p.has('show')) state.showHidden = p.get('show') === 'true';
+        els.showHidden.checked = state.showHidden;
+    }
+
+    function updateUrlParams() {
+        const p = new URLSearchParams(); p.set('counter', state.mainCounter); p.set('show', state.showHidden);
+        window.history.replaceState({}, '', `${window.location.pathname}?${p}`);
+    }
+
+    function registerDefaultPlugins() {
+        PluginManager.register({
+            id: 'analysis',
+            name: 'Analysis (Peaks)',
+            description: 'Metrics close to their global maximum',
+            order: 10,
+            render: (container, ctx) => {
+                const { agg, state, utils } = ctx;
+                if (state.headers.length === 0) return;
+                
+                const items = [];
+                state.headers.forEach(h => {
+                    if (h === 'EID') return;
+                    const max = state.counterMinMax[h].max;
+                    if (max <= 0.000001) return;
+                    const val = agg[h];
+                    const ratio = val / max;
+                    if (ratio > 0.05) items.push({ h, val, max, ratio }); 
+                });
+                
+                items.sort((a,b) => b.ratio - a.ratio);
+                
+                if (items.length === 0) {
+                    container.innerHTML = '<div style="padding:10px;color:#888;font-style:italic">No significant peaks found relative to global maximums.</div>';
+                    return;
+                }
+
+                items.forEach(item => {
+                    const row = utils.createMetricRow(item.h, item.val, utils.createBar(item.val, item.max, item.h === state.mainCounter ? 'var(--accent-color)' : null));
+                    container.appendChild(row);
+                });
+            }
+        });
+
+        PluginManager.register({
+            id: 'counters',
+            name: 'Counters',
+            description: 'All metrics for this event',
+            order: 20,
+            render: (container, ctx) => {
+                const { agg, state, utils } = ctx;
+                const keys = state.headers.slice().sort((a,b) => a === state.mainCounter ? -1 : b === state.mainCounter ? 1 : a.localeCompare(b));
+                keys.forEach(key => {
+                    const val = agg[key], meta = state.counterMinMax[key];
+                    const row = utils.createMetricRow(key, val, utils.createBar(val, meta ? meta.max : 0, key === state.mainCounter ? 'var(--accent-color)' : null));
+                    container.appendChild(row);
+                });
+            }
+        });
+
+        PluginManager.register({
+            id: 'correlation',
+            name: 'Correlation',
+            description: 'Metrics that correlate with the Main Counter globally',
+            order: 30,
+            render: (container, ctx) => {
+                const { agg, state, utils } = ctx;
+                const keys = Object.keys(state.correlations).sort((a,b) => state.correlations[b] - state.correlations[a]);
+                
+                keys.forEach(key => {
+                    const r = state.correlations[key];
+                    const val = agg[key];
+                    const meta = state.counterMinMax[key];
+                    const tooltip = "Global Pearson Correlation:\n 1.0 = Direct relationship (moves together)\n 0.0 = No relationship\n-1.0 = Inverse relationship (moves opposite)";
+                    const context = `<div class="metric-bar-wrapper" style="gap:5px"><div title="${tooltip}" style="width:50px;font-size:10px;text-align:right;color:${r>0.7?'var(--accent-color)':'#888'};cursor:help;border-bottom:1px dotted #888">R=${r.toFixed(2)}</div>${utils.createBar(val, meta.max, null).replace('class="metric-bar-wrapper"', 'style="flex:1;display:flex;align-items:center;gap:10px"')}</div>`;
+                    
+                    const row = document.createElement('div');
+                    row.className = 'metric-row';
+                    row.innerHTML = `<div class="metric-name" title="${key}">${key}</div><div class="metric-val-current">${utils.fmtNum(val)}</div>${context}`;
+                    container.appendChild(row);
+                });
+            }
+        });
+
+        PluginManager.register({
+            id: 'children',
+            name: 'Top Children',
+            description: 'Flat list of most expensive descendants',
+            order: 40,
+            render: (container, ctx) => {
+                const { node, state, utils } = ctx;
+                if (node.children.length === 0) {
+                    container.innerHTML = '<div style="padding:10px;color:#888;font-style:italic">Leaf node. No children to analyze.</div>';
+                    return;
+                }
+
+                const flat = [];
+                const traverse = (n) => { n.children.forEach(c => { flat.push(c); traverse(c); }); };
+                traverse(node);
+
+                flat.sort((a, b) => {
+                    const valA = state.counters.get(a.eid) ? state.counters.get(a.eid)[state.mainCounter] : 0;
+                    const valB = state.counters.get(b.eid) ? state.counters.get(b.eid)[state.mainCounter] : 0;
+                    return valB - valA;
+                });
+
+                const top20 = flat.slice(0, 50); 
+                const maxVal = state.counters.get(top20[0].eid) ? state.counters.get(top20[0].eid)[state.mainCounter] : 0;
+
+                top20.forEach(child => {
+                    const val = state.counters.get(child.eid) ? state.counters.get(child.eid)[state.mainCounter] : 0;
+                    const context = utils.createBar(val, maxVal, 'var(--accent-color)');
+                    const row = document.createElement('div');
+                    row.className = 'metric-row';
+                    row.style.cursor = 'pointer';
+                    row.onclick = () => utils.selectNode(child); 
+                    row.innerHTML = `<div class="metric-name" style="width:220px" title="${child.name}">${child.name}</div><div class="metric-val-current">${utils.fmtNum(val)}</div>${context}`;
+                    container.appendChild(row);
+                });
+            }
+        });
+    }
+
+    init();
+</script>
+</body>
+</html>
