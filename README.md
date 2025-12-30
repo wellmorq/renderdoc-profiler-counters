@@ -30,9 +30,12 @@ To visualize your capture, you need two files:
     - Save it as `counters.csv`.
 
 ### 2. Visualize
-- Open `index.html` in any modern browser.
+- Open `RenderDocPerfTimeline.html` in any modern browser.
 - Drag & Drop `events.txt` and `counters.csv` into the respective header zones.
 - Load plugins (`BoundDetector.js`, `ShaderXray.js`) by dragging them into the plugin area or using the **+** button.
+
+### 3. Quick Start with Examples
+The repository includes `events.txt` and `counters.csv` which you can use as sample data to test the tool and its plugins immediately.
 
 ## Included Plugins
 
