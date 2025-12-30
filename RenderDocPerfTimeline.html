@@ -111,6 +111,7 @@
         #details-header { 
             padding: 12px 20px; border-bottom: 1px solid var(--border-color); 
             background-color: var(--bg-color); flex-shrink: 0;
+            display: flex; align-items: center; justify-content: space-between;
         }
         .details-title-text { font-weight: 700; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
@@ -215,6 +216,9 @@
     <div id="details-panel" class="hidden">
         <div id="details-header">
             <span id="details-title" class="details-title-text">Details</span>
+            <button id="ask-ai-btn" class="icon-btn" style="width:auto; padding:0 12px; font-size:12px; border-radius:4px; display:none; font-weight:600;">
+                Ask AI
+            </button>
         </div>
         <div class="tabs-bar">
             <div id="tabs-container"></div>
@@ -259,6 +263,7 @@
         splitter: document.getElementById('splitter'), 
         detailsPanel: document.getElementById('details-panel'),
         detailsTitle: document.getElementById('details-title'), 
+        askAiBtn: document.getElementById('ask-ai-btn'),
         tabsContainer: document.getElementById('tabs-container'),
         detailsBody: document.getElementById('details-body'),
         addPluginBtn: document.getElementById('add-plugin-btn'),
@@ -402,6 +407,53 @@
     
     window.PluginManager = PluginManager;
 
+    function generateAiPrompt(node, agg) {
+        let metricsText = "";
+        const sortedKeys = state.headers.slice().sort((a,b) => {
+             if (a === state.mainCounter) return -1;
+             if (b === state.mainCounter) return 1;
+             return 0;
+        });
+
+        sortedKeys.forEach(h => {
+             const val = agg[h];
+             
+             const meta = state.counterMinMax[h];
+             const min = meta ? meta.min : 0;
+             const max = meta ? meta.max : 0;
+             const pct = (max > 0) ? ((val / max) * 100).toFixed(1) + '%' : 'N/A';
+             
+             // Format: - Name: Val [Min-Max] Pct
+             metricsText += `- ${h}: ${CommonUtils.fmtNum(val)} [${CommonUtils.fmtNum(min)}-${CommonUtils.fmtNum(max)}] ${pct}\n`;
+        });
+
+        // Build Hierarchy Path
+        const path = [];
+        let curr = node;
+        while(curr) {
+            path.unshift(curr.name);
+            curr = curr.parent;
+        }
+
+        return `SYSTEM_INSTRUCTION:
+You are an expert Graphics Programmer using RenderDoc. Analyze this Event Node.
+
+Structure your response exactly as follows:
+1. TL;DR: One sentence summary of the main bottleneck or observation.
+2. Most Likely Culprits: Bullet points of specific metrics indicating issues.
+3. How to Verify: Concrete steps in RenderDoc or other tools to confirm the theory.
+4. Potential Fixes: Actionable optimization steps if confirmed.
+
+Metrics Format: - Name: CurrentValue [GlobalMin-GlobalMax] %OfGlobalMax
+
+CONTEXT_DATA:
+Event: ${node.name} (EID: ${node.eid})
+Path: ${path.join(' > ')}
+
+Metrics:
+${metricsText}`;
+    }
+
     function init() {
         const theme = localStorage.getItem('theme') || 'dark';
         setTheme(theme);
@@ -469,6 +521,20 @@
         els.mainCounterSelect.onchange = (e) => { state.mainCounter = e.target.value; calcCorrelations(); renderTimeline(); updateUrlParams(); };
         els.showHidden.onchange = (e) => { state.showHidden = e.target.checked; renderTimeline(); updateUrlParams(); };
         els.resetZoom.onclick = () => { state.zoom = 1; updateZoomDisplay(); };
+
+        let aiBtnTimeout = null;
+        els.askAiBtn.onclick = () => {
+            if (!state.selectedNode || !state.currentAgg) return;
+            const text = generateAiPrompt(state.selectedNode, state.currentAgg);
+            navigator.clipboard.writeText(text).then(() => {
+                if (aiBtnTimeout) clearTimeout(aiBtnTimeout);
+                els.askAiBtn.textContent = 'Copied!';
+                aiBtnTimeout = setTimeout(() => {
+                    els.askAiBtn.textContent = 'Ask AI';
+                    aiBtnTimeout = null;
+                }, 2000);
+            }).catch(err => alert('Failed to copy: ' + err));
+        };
         
         els.timelineScrollArea.addEventListener('wheel', (e) => {
             e.preventDefault();
@@ -537,9 +603,15 @@
             const parts = lines[i].split('|'); if (parts.length < 2) continue;
             const eid = parseInt(parts[0].trim()); if (isNaN(eid)) continue;
             const match = parts[1].match(/[-=>\\]/); if (!match) continue;
-            const node = {eid, name: parts[1].substring(match.index).replace(/^[-=>\\s]+/,'').trim(), children: [], level: match.index };
+            const node = {eid, name: parts[1].substring(match.index).replace(/^[-=>\\s]+/,'').trim(), children: [], level: match.index, parent: null };
             while (stack.length > 0 && stack[stack.length - 1].level >= node.level) stack.pop();
-            if (stack.length > 0) stack[stack.length - 1].children.push(node); else roots.push(node);
+            if (stack.length > 0) {
+                const parent = stack[stack.length - 1];
+                parent.children.push(node);
+                node.parent = parent;
+            } else {
+                roots.push(node);
+            }
             stack.push(node);
         }
         state.events = roots;
@@ -682,6 +754,8 @@
         state.headers.forEach(h => agg[h] = 0);
         leaves.forEach(leaf => { const m = state.counters.get(leaf.eid); if (m) state.headers.forEach(h => agg[h] += m[h] || 0); });
         
+        state.currentAgg = agg;
+        els.askAiBtn.style.display = 'flex';
         PluginManager.renderCurrentNode(node, agg);
     }
 
