@@ -44,6 +44,3 @@ Analyzes global medians and per-event metrics to provide a "Diagnosis Card". It 
 
 ### **ShaderXray**
 Specifically designed for NVIDIA GPUs. It breaks down "Warp Issue Stalls" (Long Scoreboard, Math Throttle, Tex Throttle, etc.) and provides concrete optimization advice based on the dominant stall reason.
-
----
-**Created by [@shiko_q](https://t.me/shiko_q)** 
