@@ -243,9 +243,11 @@
 
     const state = {
         events: null, counters: null, headers: [], counterMinMax: {},
+        counterKinds: {}, timeWeightHeader: null,
         mainCounter: 'Duration (ms)', showHidden: false, 
         files: { events: null, counters: null }, zoom: 1,
-        selectedNode: null, correlations: {}
+        selectedNode: null, correlations: {},
+        currentAgg: null, currentTypedAgg: null, currentLeafRows: null
     };
     const collapsedNodes = new Set();
 
@@ -382,10 +384,12 @@
             });
         },
 
-        renderCurrentNode(node, aggData) {
+        renderCurrentNode(node, aggData, typedAggData, leafRowsData) {
             if (!node) return;
             const context = {
                 node: node, agg: aggData, state: state,
+                typedAgg: typedAggData,
+                leafRows: leafRowsData,
                 utils: CommonUtils
             };
 
@@ -404,6 +408,76 @@
     };
     
     window.PluginManager = PluginManager;
+
+    function detectCounterKind(header) {
+        const h = String(header || '').toLowerCase();
+        if (!h) return 'sum';
+        if (h.includes('.sum')) return 'sum';
+        if (h.includes('.avg') || h.includes('.pct') || h.includes('.ratio') || h.includes('.min') || h.includes('.max')) return 'mean';
+        if (h.includes('(%)') || h.includes('hit_rate') || h.includes('hit rate') || h.includes('per_warp_active')) return 'mean';
+        return 'sum';
+    }
+
+    function findTimeWeightHeader(headers) {
+        if (!Array.isArray(headers) || headers.length === 0) return null;
+        const exactOrder = ['gpu__time_duration.sum', 'gpu__time_duration', 'GPU Duration', 'GPU Duration (ms)'];
+        for (const key of exactOrder) {
+            const found = headers.find(h => h === key);
+            if (found) return found;
+        }
+        return headers.find(h => /gpu__time_duration|gpu duration|duration \(ms\)|duration/i.test(h)) || null;
+    }
+
+    function buildNodeAggregates(node) {
+        const getLeaves = (n, l = []) => !n.children.length ? (l.push(n), l) : (n.children.forEach(c => getLeaves(c, l)), l);
+        const leaves = getLeaves(node);
+        const rows = [];
+        leaves.forEach(leaf => {
+            const m = state.counters.get(leaf.eid);
+            if (m) rows.push(m);
+        });
+
+        const agg = {};
+        const typedAgg = {};
+        state.headers.forEach(h => { agg[h] = 0; typedAgg[h] = 0; });
+
+        rows.forEach(m => {
+            state.headers.forEach(h => {
+                const v = m[h];
+                if (typeof v === 'number' && Number.isFinite(v)) agg[h] += v;
+            });
+        });
+
+        const weightHeader = state.timeWeightHeader && state.headers.includes(state.timeWeightHeader)
+            ? state.timeWeightHeader
+            : (state.mainCounter && state.headers.includes(state.mainCounter) ? state.mainCounter : null);
+
+        state.headers.forEach(h => {
+            const kind = state.counterKinds[h] || 'sum';
+            if (kind === 'sum') {
+                typedAgg[h] = agg[h];
+                return;
+            }
+            let wSum = 0;
+            let vwSum = 0;
+            let sum = 0;
+            let count = 0;
+            rows.forEach(m => {
+                const v = m[h];
+                if (typeof v !== 'number' || !Number.isFinite(v)) return;
+                sum += v;
+                count += 1;
+                if (!weightHeader) return;
+                const w = m[weightHeader];
+                if (typeof w !== 'number' || !Number.isFinite(w) || w <= 0) return;
+                wSum += w;
+                vwSum += v * w;
+            });
+            typedAgg[h] = wSum > 0 ? (vwSum / wSum) : (count > 0 ? (sum / count) : 0);
+        });
+
+        return { agg, typedAgg, rows };
+    }
 
     function generateAiPrompt(node, agg) {
         let metricsText = "";
@@ -615,6 +689,9 @@ ${metricsText}`;
         const lines = text.split(/\r?\n/); if (lines.length < 2) return;
         const headers = lines[0].split(',').map(h => h.trim());
         state.headers = headers.filter(h => h !== 'EID'); state.counters = new Map();
+        state.counterKinds = {};
+        state.timeWeightHeader = findTimeWeightHeader(state.headers);
+        state.headers.forEach(h => state.counterKinds[h] = detectCounterKind(h));
         state.headers.forEach(h => state.counterMinMax[h] = { min: Infinity, max: -Infinity });
         for (let i = 1; i < lines.length; i++) {
             const vals = lines[i].split(','), eid = parseInt(vals[0]); if (isNaN(eid)) continue;
@@ -739,16 +816,13 @@ ${metricsText}`;
     function selectNode(node) {
         state.selectedNode = node;
         els.detailsTitle.textContent = `${node.name} (EID: ${node.eid})`;
-        
-        const getLeaves = (n, l = []) => !n.children.length ? (l.push(n), l) : (n.children.forEach(c => getLeaves(c, l)), l);
-        const leaves = getLeaves(node);
-        const agg = {};
-        state.headers.forEach(h => agg[h] = 0);
-        leaves.forEach(leaf => { const m = state.counters.get(leaf.eid); if (m) state.headers.forEach(h => agg[h] += m[h] || 0); });
-        
-        state.currentAgg = agg;
+
+        const aggregates = buildNodeAggregates(node);
+        state.currentAgg = aggregates.agg;
+        state.currentTypedAgg = aggregates.typedAgg;
+        state.currentLeafRows = aggregates.rows;
         els.askAiBtn.style.display = 'flex';
-        PluginManager.renderCurrentNode(node, agg);
+        PluginManager.renderCurrentNode(node, aggregates.agg, aggregates.typedAgg, aggregates.rows);
     }
 
     function setupSplitter() {
@@ -791,7 +865,8 @@ ${metricsText}`;
             description: 'Metrics close to their global maximum',
             order: 10,
             render: (container, ctx) => {
-                const { agg, state, utils } = ctx;
+                const { agg, typedAgg, state, utils } = ctx;
+                const viewAgg = typedAgg || agg;
                 if (state.headers.length === 0) return;
                 
                 const items = [];
@@ -799,7 +874,7 @@ ${metricsText}`;
                     if (h === 'EID') return;
                     const max = state.counterMinMax[h].max;
                     if (max <= 0.000001) return;
-                    const val = agg[h];
+                    const val = viewAgg[h];
                     const ratio = val / max;
                     if (ratio > 0.05) items.push({ h, val, max, ratio }); 
                 });
@@ -834,10 +909,11 @@ ${metricsText}`;
             description: 'All metrics for this event',
             order: 20,
             render: (container, ctx) => {
-                const { agg, state, utils } = ctx;
+                const { agg, typedAgg, state, utils } = ctx;
+                const viewAgg = typedAgg || agg;
                 const keys = state.headers.slice().sort((a,b) => a === state.mainCounter ? -1 : b === state.mainCounter ? 1 : a.localeCompare(b));
                 keys.forEach(key => {
-                    const val = agg[key], meta = state.counterMinMax[key];
+                    const val = viewAgg[key], meta = state.counterMinMax[key];
                     const row = utils.createMetricRow(key, val, utils.createBar(val, meta ? meta.max : 0, key === state.mainCounter ? 'var(--accent-color)' : null));
                     container.appendChild(row);
                 });
@@ -850,12 +926,13 @@ ${metricsText}`;
             description: 'Metrics that correlate with the Main Counter globally',
             order: 30,
             render: (container, ctx) => {
-                const { agg, state, utils } = ctx;
+                const { agg, typedAgg, state, utils } = ctx;
+                const viewAgg = typedAgg || agg;
                 const keys = Object.keys(state.correlations).sort((a,b) => state.correlations[b] - state.correlations[a]);
                 
                 keys.forEach(key => {
                     const r = state.correlations[key];
-                    const val = agg[key];
+                    const val = viewAgg[key];
                     const meta = state.counterMinMax[key];
                     const tooltip = "Global Pearson Correlation:\n 1.0 = Direct relationship (moves together)\n 0.0 = No relationship\n-1.0 = Inverse relationship (moves opposite)";
                     const context = `<div class="metric-bar-wrapper" style="gap:5px"><div title="${tooltip}" style="width:50px;font-size:10px;text-align:right;color:${r>0.7?'var(--accent-color)':'#888'};cursor:help;border-bottom:1px dotted #888">R=${r.toFixed(2)}</div>${utils.createBar(val, meta.max, null).replace('class="metric-bar-wrapper"', 'style="flex:1;display:flex;align-items:center;gap:10px"')}</div>`;

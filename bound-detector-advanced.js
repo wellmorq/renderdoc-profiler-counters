@@ -40,8 +40,8 @@
 
   
   const regCount = (base) => [
-    `${base}.avg.ratio`,
     `${base}.avg`,
+    `${base}.avg.ratio`,
     base
   ];
   const regPct = (base) => [
@@ -170,7 +170,6 @@
     if (a[base + 1] !== undefined) return a[base] + rest * (a[base + 1] - a[base]);
     return a[base];
   }
-  const median = (arr) => quantile(arr, 0.5);
 
   function clamp01(x) {
     if (!Number.isFinite(x)) return 0;
@@ -212,11 +211,6 @@
     return utils.fmtGBps(bytes, ns);
   }
 
-  function safeDiv(utils, a, b) {
-    if (!utils.isNumber(a) || !utils.isNumber(b) || b === 0) return NaN;
-    return utils.safeDiv(a, b);
-  }
-
   
   
   
@@ -255,30 +249,6 @@
   
   
   
-  function getAggSafe(agg, resolve, def, utils, missing, label) {
-    const name = resolve(def);
-    if (!name) {
-      if (missing) missing.push(label || (Array.isArray(def) ? def[0] : def));
-      return { v: NaN, name: null };
-    }
-    const v = agg ? agg[name] : NaN;
-    if (!utils.isNumber(v)) return { v: NaN, name };
-    return { v, name };
-  }
-
-  function collect(state, resolve, def, utils, predicateFn) {
-    const name = resolve(def);
-    if (!name) return [];
-    const out = [];
-    (state.counters || []).forEach((m) => {
-      const v = m[name];
-      if (!utils.isNumber(v)) return;
-      if (predicateFn && !predicateFn(v, m)) return;
-      out.push(v);
-    });
-    return out;
-  }
-
   
   
   
@@ -313,7 +283,7 @@
   
   function render(container, ctx) {
     container.innerHTML = '';
-    const { node, agg, state, utils } = ctx;
+    const { node, agg, typedAgg, state, utils } = ctx;
 
     if (!node) {
       container.innerHTML = '<div style="padding:10px">Select an event on the timeline.</div>';
@@ -321,7 +291,15 @@
     }
 
     const headers = state.headers || [];
-    const resolve = makeResolver(headers);
+    const resolveRaw = makeResolver(headers);
+    const resolveCache = new Map();
+    const resolve = (def) => {
+      const key = Array.isArray(def) ? `a:${def.join('\u0001')}` : `s:${String(def)}`;
+      if (resolveCache.has(key)) return resolveCache.get(key);
+      const v = resolveRaw(def);
+      resolveCache.set(key, v);
+      return v;
+    };
 
     
     const missing = [];
@@ -335,9 +313,15 @@
 
     const coverage = metricKeys.length > 0 ? clamp01(1 - missing.length / metricKeys.length) : 1;
 
-    
-    let timeNs = getAggSafe(agg, resolve, METRICS.GPU_TIME, utils, missing, 'gpu time').v;
-    const timeName = getAggSafe(agg, resolve, METRICS.GPU_TIME, utils).name;
+    const aggView = (typedAgg && typeof typedAgg === 'object') ? typedAgg : agg;
+    const getMetric = (def) => {
+      const name = resolve(def);
+      const v = (aggView && name) ? aggView[name] : NaN;
+      return { v: utils.isNumber(v) ? v : NaN, name };
+    };
+
+    let timeNs = getMetric(METRICS.GPU_TIME).v;
+    const timeName = getMetric(METRICS.GPU_TIME).name;
 
     
     if (utils.isNumber(timeNs) && timeName) {
@@ -347,84 +331,78 @@
       if (isMs) timeNs *= 1e6;
     }
 
-    let activeNs = getAggSafe(agg, resolve, METRICS.GPU_ACTIVE, utils, missing, 'gpu active').v;
+    let activeNs = getMetric(METRICS.GPU_ACTIVE).v;
 
-    const dramRead = getAggSafe(agg, resolve, METRICS.DRAM_READ_BYTES, utils).v;
-    const dramWrite = getAggSafe(agg, resolve, METRICS.DRAM_WRITE_BYTES, utils).v;
+    const dramRead = getMetric(METRICS.DRAM_READ_BYTES).v;
+    const dramWrite = getMetric(METRICS.DRAM_WRITE_BYTES).v;
 
-    const dramReadS = getAggSafe(agg, resolve, METRICS.DRAM_READ_SECTORS, utils).v;
-    const dramWriteS = getAggSafe(agg, resolve, METRICS.DRAM_WRITE_SECTORS, utils).v;
+    const instAll = getMetric(METRICS.INST_ALL).v;
+    const instVS = getMetric(METRICS.INST_VS).v;
+    const instTCS = getMetric(METRICS.INST_TCS).v;
+    const instTES = getMetric(METRICS.INST_TES).v;
+    const instGS = getMetric(METRICS.INST_GS).v;
+    const instPS = getMetric(METRICS.INST_PS).v;
+    const instCS = getMetric(METRICS.INST_CS).v;
 
-    const instAll = getAggSafe(agg, resolve, METRICS.INST_ALL, utils).v;
-    const instVS = getAggSafe(agg, resolve, METRICS.INST_VS, utils).v;
-    const instTCS = getAggSafe(agg, resolve, METRICS.INST_TCS, utils).v;
-    const instTES = getAggSafe(agg, resolve, METRICS.INST_TES, utils).v;
-    const instGS = getAggSafe(agg, resolve, METRICS.INST_GS, utils).v;
-    const instPS = getAggSafe(agg, resolve, METRICS.INST_PS, utils).v;
-    const instCS = getAggSafe(agg, resolve, METRICS.INST_CS, utils).v;
-
-    const l1Hit = to01(getAggSafe(agg, resolve, METRICS.L1_HIT, utils).v, { zeroIsNaN: true, max: 1.2 });
-    const l2Hit = to01(getAggSafe(agg, resolve, METRICS.L2_HIT, utils).v, { zeroIsNaN: true, max: 1.2 });
+    const l1Hit = to01(getMetric(METRICS.L1_HIT).v, { zeroIsNaN: true, max: 1.2 });
+    const l2Hit = to01(getMetric(METRICS.L2_HIT).v, { zeroIsNaN: true, max: 1.2 });
 
     
-    const samples = getAggSafe(agg, resolve, METRICS.SAMPLES_PASSED, utils).v;
-    const psInv = getAggSafe(agg, resolve, METRICS.PS_INVOCATIONS, utils).v;
-    const vsInv = getAggSafe(agg, resolve, METRICS.VS_INVOCATIONS, utils).v;
-    const csInv = getAggSafe(agg, resolve, METRICS.CS_INVOCATIONS, utils).v;
-    const prims = getAggSafe(agg, resolve, METRICS.RASTERIZED_PRIMS, utils).v;
-
-    
+    const samples = getMetric(METRICS.SAMPLES_PASSED).v;
+    const psInv = getMetric(METRICS.PS_INVOCATIONS).v;
+    const vsInv = getMetric(METRICS.VS_INVOCATIONS).v;
+    const csInv = getMetric(METRICS.CS_INVOCATIONS).v;
     const stalls = {
-      barrier: to01(getAggSafe(agg, resolve, METRICS.STALL_BARRIER, utils).v),
-      branch: to01(getAggSafe(agg, resolve, METRICS.STALL_BRANCH, utils).v),
-      dispatch: to01(getAggSafe(agg, resolve, METRICS.STALL_DISPATCH, utils).v),
-      drain: to01(getAggSafe(agg, resolve, METRICS.STALL_DRAIN, utils).v),
-      lg: to01(getAggSafe(agg, resolve, METRICS.STALL_LG, utils).v),
-      long: to01(getAggSafe(agg, resolve, METRICS.STALL_LONG, utils).v),
-      longL1tex: to01(getAggSafe(agg, resolve, METRICS.STALL_LONG_L1TEX, utils).v),
-      math: to01(getAggSafe(agg, resolve, METRICS.STALL_MATH, utils).v),
-      membar: to01(getAggSafe(agg, resolve, METRICS.STALL_MEMBAR, utils).v),
-      mio: to01(getAggSafe(agg, resolve, METRICS.STALL_MIO, utils).v),
-      mioMio: to01(getAggSafe(agg, resolve, METRICS.STALL_MIO_MIO, utils).v),
-      misc: to01(getAggSafe(agg, resolve, METRICS.STALL_MISC, utils).v),
-      noInstr: to01(getAggSafe(agg, resolve, METRICS.STALL_NO_INSTR, utils).v),
-      notSelected: to01(getAggSafe(agg, resolve, METRICS.STALL_NOT_SELECTED, utils).v),
-      selected: to01(getAggSafe(agg, resolve, METRICS.STALL_SELECTED, utils).v),
-      short: to01(getAggSafe(agg, resolve, METRICS.STALL_SHORT, utils).v),
-      sleep: to01(getAggSafe(agg, resolve, METRICS.STALL_SLEEP, utils).v),
-      tex: to01(getAggSafe(agg, resolve, METRICS.STALL_TEX, utils).v),
-      wait: to01(getAggSafe(agg, resolve, METRICS.STALL_WAIT, utils).v),
+      barrier: to01(getMetric(METRICS.STALL_BARRIER).v),
+      branch: to01(getMetric(METRICS.STALL_BRANCH).v),
+      dispatch: to01(getMetric(METRICS.STALL_DISPATCH).v),
+      drain: to01(getMetric(METRICS.STALL_DRAIN).v),
+      lg: to01(getMetric(METRICS.STALL_LG).v),
+      long: to01(getMetric(METRICS.STALL_LONG).v),
+      longL1tex: to01(getMetric(METRICS.STALL_LONG_L1TEX).v),
+      math: to01(getMetric(METRICS.STALL_MATH).v),
+      membar: to01(getMetric(METRICS.STALL_MEMBAR).v),
+      mio: to01(getMetric(METRICS.STALL_MIO).v),
+      mioMio: to01(getMetric(METRICS.STALL_MIO_MIO).v),
+      misc: to01(getMetric(METRICS.STALL_MISC).v),
+      noInstr: to01(getMetric(METRICS.STALL_NO_INSTR).v),
+      notSelected: to01(getMetric(METRICS.STALL_NOT_SELECTED).v),
+      selected: to01(getMetric(METRICS.STALL_SELECTED).v),
+      short: to01(getMetric(METRICS.STALL_SHORT).v),
+      sleep: to01(getMetric(METRICS.STALL_SLEEP).v),
+      tex: to01(getMetric(METRICS.STALL_TEX).v),
+      wait: to01(getMetric(METRICS.STALL_WAIT).v),
     };
 
     
     const regs = {
-      psCount: getAggSafe(agg, resolve, METRICS.REGS_PS_COUNT, utils).v,
-      psPct: to01(getAggSafe(agg, resolve, METRICS.REGS_PS_PCT, utils).v, { zeroIsNaN: true, max: 2 }),
-      vtgCount: getAggSafe(agg, resolve, METRICS.REGS_VTG_COUNT, utils).v,
-      vtgPct: to01(getAggSafe(agg, resolve, METRICS.REGS_VTG_PCT, utils).v, { zeroIsNaN: true, max: 2 }),
-      csCount: getAggSafe(agg, resolve, METRICS.REGS_CS_COUNT, utils).v,
-      csPct: to01(getAggSafe(agg, resolve, METRICS.REGS_CS_PCT, utils).v, { zeroIsNaN: true, max: 2 }),
-      d3Count: getAggSafe(agg, resolve, METRICS.REGS_3D_COUNT, utils).v,
-      d3Pct: to01(getAggSafe(agg, resolve, METRICS.REGS_3D_PCT, utils).v, { zeroIsNaN: true, max: 2 }),
+      psCount: getMetric(METRICS.REGS_PS_COUNT).v,
+      psPct: to01(getMetric(METRICS.REGS_PS_PCT).v, { zeroIsNaN: true, max: 2 }),
+      vtgCount: getMetric(METRICS.REGS_VTG_COUNT).v,
+      vtgPct: to01(getMetric(METRICS.REGS_VTG_PCT).v, { zeroIsNaN: true, max: 2 }),
+      csCount: getMetric(METRICS.REGS_CS_COUNT).v,
+      csPct: to01(getMetric(METRICS.REGS_CS_PCT).v, { zeroIsNaN: true, max: 2 }),
+      d3Count: getMetric(METRICS.REGS_3D_COUNT).v,
+      d3Pct: to01(getMetric(METRICS.REGS_3D_PCT).v, { zeroIsNaN: true, max: 2 }),
     };
 
     
     const sh = {
-      wfAll: getAggSafe(agg, resolve, METRICS.SH_WF_ALL, utils).v,
-      wfLd: getAggSafe(agg, resolve, METRICS.SH_WF_LD, utils).v,
-      wfSt: getAggSafe(agg, resolve, METRICS.SH_WF_ST, utils).v,
-      wfAtom: getAggSafe(agg, resolve, METRICS.SH_WF_ATOM, utils).v,
-      bankConf: getAggSafe(agg, resolve, METRICS.SH_BANK_CONFLICTS, utils).v,
-      bytesRead: getAggSafe(agg, resolve, METRICS.SH_BYTES_READ, utils).v,
-      bytesAtom: getAggSafe(agg, resolve, METRICS.SH_BYTES_ATOM, utils).v,
+      wfAll: getMetric(METRICS.SH_WF_ALL).v,
+      wfLd: getMetric(METRICS.SH_WF_LD).v,
+      wfSt: getMetric(METRICS.SH_WF_ST).v,
+      wfAtom: getMetric(METRICS.SH_WF_ATOM).v,
+      bankConf: getMetric(METRICS.SH_BANK_CONFLICTS).v,
+      bytesRead: getMetric(METRICS.SH_BYTES_READ).v,
+      bytesAtom: getMetric(METRICS.SH_BYTES_ATOM).v,
     };
 
     
     const backend = {
-      cropR: getAggSafe(agg, resolve, METRICS.CROP_READ_SUBPK, utils).v,
-      cropW: getAggSafe(agg, resolve, METRICS.CROP_WRITE_SUBPK, utils).v,
-      zropR: getAggSafe(agg, resolve, METRICS.ZROP_READ_SUBPK, utils).v,
-      zropW: getAggSafe(agg, resolve, METRICS.ZROP_WRITE_SUBPK, utils).v,
+      cropR: getMetric(METRICS.CROP_READ_SUBPK).v,
+      cropW: getMetric(METRICS.CROP_WRITE_SUBPK).v,
+      zropR: getMetric(METRICS.ZROP_READ_SUBPK).v,
+      zropW: getMetric(METRICS.ZROP_WRITE_SUBPK).v,
     };
 
     
@@ -486,9 +464,6 @@
       ? (sh.bankConf / sh.wfAll) : NaN;
 
     const shBytes = (utils.isNumber(sh.bytesRead) ? sh.bytesRead : 0) + (utils.isNumber(sh.bytesAtom) ? sh.bytesAtom : 0);
-    const shBW = (utils.isNumber(shBytes) && utils.isNumber(timeNs) && timeNs > 0)
-      ? (shBytes * 1e9 / timeNs) : NaN;
-
     const backendWrites = (utils.isNumber(backend.cropW) ? backend.cropW : 0) + (utils.isNumber(backend.zropW) ? backend.zropW : 0);
     const backendWriteRate = (utils.isNumber(backendWrites) && utils.isNumber(timeNs) && timeNs > 0)
       ? (backendWrites * 1e9 / timeNs) : NaN;
@@ -931,7 +906,14 @@
       }
 
       if (s > 0.18) {
-        const which = (backend.zropW > backend.cropW) ? 'ZROP (depth/stencil)' : 'CROP (color/blend)';
+        let which = 'CROP/ZROP (insufficient split data)';
+        if (Number.isFinite(backend.zropW) && Number.isFinite(backend.cropW)) {
+          which = (backend.zropW > backend.cropW) ? 'ZROP (depth/stencil)' : 'CROP (color/blend)';
+        } else if (Number.isFinite(backend.zropW)) {
+          which = 'ZROP (depth/stencil)';
+        } else if (Number.isFinite(backend.cropW)) {
+          which = 'CROP (color/blend)';
+        }
         add(
           'backend',
           `Backend/ROP is the bottleneck (${which})`,
@@ -965,7 +947,7 @@
         0.12,
         [
           hint,
-          'Make sure metrics from BoundDetectorAdvanced.metrics.renderdoc.json are enabled and recapture.'
+          'Make sure metrics from metrics.json are enabled and recapture.'
         ],
         'Check: enable metrics, recapture, then compare a few drawcalls — where time is higher and stall is higher, that is the bottleneck.',
         [
