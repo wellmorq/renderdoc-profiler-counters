@@ -1079,7 +1079,7 @@
     checkT.style.marginBottom = '6px';
 
     const checkP = document.createElement('div');
-    checkP.textContent = best.check || 'n/a';
+    checkP.innerHTML = best.check || 'n/a';
     checkP.style.fontSize = '13px';
     checkP.style.lineHeight = '1.45';
 
@@ -1144,3 +1144,4 @@
     render
   });
 })();
+
