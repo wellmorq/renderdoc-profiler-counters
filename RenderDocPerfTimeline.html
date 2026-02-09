@@ -273,7 +273,6 @@
         resetZoom: document.getElementById('reset-zoom')
     };
 
-    // --- SHARED UTILITIES (DRY) ---
     const CommonUtils = {
         isNumber: (x) => typeof x === 'number' && Number.isFinite(x),
         clamp01: (x) => !Number.isFinite(x) ? 0 : (x < 0 ? 0 : (x > 1 ? 1 : x)),
@@ -328,10 +327,9 @@
             return `<div class="metric-bar-wrapper"><div class="metric-val-min">0</div><div class="metric-bar-container"><div class="metric-bar" style="width:${percent}%;background-color:${color||'#888'}"></div></div><div class="metric-val-max">${CommonUtils.fmtNum(max)}</div></div>`;
         },
         
-        selectNode: selectNode // Passed reference
+        selectNode: selectNode 
     };
 
-    // --- PLUGIN SYSTEM ---
     const PluginManager = {
         plugins: [],
         activeTabId: null,
@@ -423,11 +421,9 @@
              const max = meta ? meta.max : 0;
              const pct = (max > 0) ? ((val / max) * 100).toFixed(1) + '%' : 'N/A';
              
-             // Format: - Name: Val [Min-Max] Pct
              metricsText += `- ${h}: ${CommonUtils.fmtNum(val)} [${CommonUtils.fmtNum(min)}-${CommonUtils.fmtNum(max)}] ${pct}\n`;
         });
 
-        // Build Hierarchy Path
         const path = [];
         let curr = node;
         while(curr) {
@@ -459,7 +455,6 @@ ${metricsText}`;
         setTheme(theme);
         els.themeToggle.onclick = () => setTheme(document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark');
         
-        // Plugin Loading Logic
         const loadPluginFromFile = (file) => {
              const reader = new FileReader();
              reader.onload = (ev) => {
@@ -473,7 +468,6 @@ ${metricsText}`;
              reader.readAsText(file);
         };
 
-        // Plugin Drag & Drop Support
         document.addEventListener('dragover', e => e.preventDefault());
         document.addEventListener('drop', e => {
             const files = Array.from(e.dataTransfer.files);
@@ -486,7 +480,6 @@ ${metricsText}`;
             }
         }, true);
 
-        // Manual Plugin Load
         els.addPluginBtn.onclick = () => els.pluginInput.click();
         els.pluginInput.onchange = (e) => {
             if (e.target.files.length > 0) {
@@ -603,7 +596,8 @@ ${metricsText}`;
             const parts = lines[i].split('|'); if (parts.length < 2) continue;
             const eid = parseInt(parts[0].trim()); if (isNaN(eid)) continue;
             const match = parts[1].match(/[-=>\\]/); if (!match) continue;
-            const node = {eid, name: parts[1].substring(match.index).replace(/^[-=>\\s]+/,'').trim(), children: [], level: match.index, parent: null };
+            const level = Math.floor(match.index / 2);
+            const node = {eid, name: parts[1].substring(match.index).replace(/^[-=>\\s]+/,'').trim(), children: [], level, parent: null };
             while (stack.length > 0 && stack[stack.length - 1].level >= node.level) stack.pop();
             if (stack.length > 0) {
                 const parent = stack[stack.length - 1];
@@ -646,7 +640,6 @@ ${metricsText}`;
         const sumMain = mainVals.reduce((a,b)=>a+b,0);
         const avgMain = sumMain / n;
         
-        // Pearson correlation
         const correlations = {};
         keys.forEach(key => {
             let num = 0, den1 = 0, den2 = 0;
@@ -747,7 +740,6 @@ ${metricsText}`;
         state.selectedNode = node;
         els.detailsTitle.textContent = `${node.name} (EID: ${node.eid})`;
         
-        // Aggregate Data
         const getLeaves = (n, l = []) => !n.children.length ? (l.push(n), l) : (n.children.forEach(c => getLeaves(c, l)), l);
         const leaves = getLeaves(node);
         const agg = {};
