@@ -787,7 +787,7 @@ ${metricsText}`;
     function registerDefaultPlugins() {
         PluginManager.register({
             id: 'analysis',
-            name: 'Analysis (Peaks)',
+            name: 'Peaks',
             description: 'Metrics close to their global maximum',
             order: 10,
             render: (container, ctx) => {
@@ -813,6 +813,16 @@ ${metricsText}`;
 
                 items.forEach(item => {
                     const row = utils.createMetricRow(item.h, item.val, utils.createBar(item.val, item.max, item.h === state.mainCounter ? 'var(--accent-color)' : null));
+                    const nameEl = row.querySelector('.metric-name');
+                    if (nameEl) {
+                        nameEl.style.whiteSpace = 'normal';
+                        nameEl.style.overflowWrap = 'anywhere';
+                        nameEl.style.wordBreak = 'break-word';
+                        nameEl.style.overflow = 'visible';
+                        nameEl.style.textOverflow = 'clip';
+                        nameEl.style.lineHeight = '1.2';
+                        nameEl.style.alignSelf = 'flex-start';
+                    }
                     container.appendChild(row);
                 });
             }

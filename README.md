@@ -1,17 +1,16 @@
 # RenderDoc Perf Timeline
 
-A visualization tool for RenderDoc performance counters. It transforms flat CSV data into an interactive, hierarchical timeline, helping quickly identify gpu bottlenecks and shader stalls.
+A visualization tool for RenderDoc performance counters. It transforms flat CSV data into an interactive, hierarchical timeline to help identify GPU bottlenecks.
 
 ![Preview](docs/timeline_preview.png)
 
 ## Features
 
-- **Hierarchical Timeline:** View your draw calls nested by markers, exactly like in RenderDoc.
-- **Dynamic Scaling:** Blocks' widths are relative to the selected counter (Duration, Samples, etc.).
+- **Hierarchical Timeline:** View draw calls nested by markers, matching RenderDoc's Event Browser.
+- **Dynamic Scaling:** Block widths are relative to the selected counter (Duration, Samples, etc.).
 - **Plugin System:** Extend functionality with custom JavaScript plugins.
 - **Advanced Diagnostics:**
-  - **BoundDetector:** Evidence-based guessing of whether you are bound by Math, Memory, ROP, or Frontend.
-  - **ShaderXray:** Deep dive into NVIDIA Warp Stalls to understand *why* a shader is slow.
+  - **BoundDetector Advanced:** Evidence-based diagnosis of likely bottlenecks (ALU, memory, backend, sync, occupancy, etc.).
 - **Zero Installation:** Single HTML file. No server required. Works entirely in your browser.
 
 ## How to Use
@@ -19,28 +18,30 @@ A visualization tool for RenderDoc performance counters. It transforms flat CSV 
 ### 1. Export Data from RenderDoc
 To visualize your capture, you need two files:
 
-1.  **Events Hierarchy:** 
-    - In the **Event Browser**, right-click and select **Export to TXT** - 💾.
-    - Save it as `events.txt`.
-2.  **Performance Counters:**
-    - Open the **Performance Counter Viewer**.
-    - Select your counters (NVIDIA Perf SDK counters recommended for advanced plugins).
-    - Click **Capture Counters**.
-    - Click **Save to CSV** - 💾.
-    - Save it as `counters.csv`.
+1. **Events Hierarchy:**
+   - In the **Event Browser**, right-click and select **Export to TXT**.
+   - Save as `example-events.txt` (or any name).
+2. **Performance Counters:**
+   - Open the **Performance Counter Viewer**.
+   - Select your counters (NVIDIA Perf SDK counters recommended for the advanced plugin).
+   - Click **Capture Counters**.
+   - Click **Save to CSV**.
+   - Save as `example-counters.csv` (or any name).
 
 ### 2. Visualize
-- Open `RenderDocPerfTimeline.html` in any modern browser.
-- Drag & Drop `events.txt` and `counters.csv` into the respective header zones.
-- Load plugins (`BoundDetector.js`, `ShaderXray.js`) by dragging them into the plugin area or using the **+** button.
+- Open `main.html` in any modern browser.
+- Drag & drop your `example-events.txt` and `example-counters.csv` into the header zones.
+- Load the plugin (`bound-detector-advanced.js`) using the **+** button.
 
 ### 3. Quick Start with Examples
-The repository includes `events.txt` and `counters.csv` which you can use as sample data to test the tool and its plugins immediately.
+The repository includes `example-events.txt` and `example-counters.csv` so you can test the tool immediately.
 
-## Included Plugins
+## Included Plugin
 
-### **BoundDetector**
-Analyzes global medians and per-event metrics to provide a "Diagnosis Card". It tells you if a draw call is likely limited by geometry complexity, pixel throughput, memory latency, or ALU pressure.
+### **BoundDetector Advanced**
+Analyzes per-event metrics and global baselines to produce a diagnosis card: likely bound by texture/memory, ALU, backend/ROP, sync/idle, occupancy, or other common GPU limits.
 
-### **ShaderXray**
-Specifically designed for NVIDIA GPUs. It breaks down "Warp Issue Stalls" (Long Scoreboard, Math Throttle, Tex Throttle, etc.) and provides concrete optimization advice based on the dominant stall reason.
+## Metrics
+
+- `metrics.json` contains the current (maximal) set of counters expected by the plugin.
+- `metrics.md` documents the metric list and descriptions.
