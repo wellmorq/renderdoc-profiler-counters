@@ -1,11 +1,11 @@
-// BoundDetectorAdvanced (RenderDoc UI plugin)
-// Auto-diagnose likely bottleneck for the selected draw/dispatch using a small, validated metric set.
-//
-// This version is adapted to real counters present in `all.json` for NVIDIA + RenderDoc.
-// It avoids unsupported "Throughput" and Top_Level_Triage.* counters and uses robust name matching
-// (works with headers that include units like " (...)").
-//
-// Author: generated with GPT-5.2 Pro
+
+
+
+
+
+
+
+
 
 (function () {
   'use strict';
@@ -14,9 +14,9 @@
   const TAB_NAME = 'BoundDetectorAdvanced';
   const TAB_ORDER = 2;
 
-  // ------------------------------
-  // Metric name helpers
-  // ------------------------------
+  
+  
+  
   const c = (base, extra = []) => [
     `${base}.sum`,
     `${base}.avg`,
@@ -38,7 +38,7 @@
 
   const g = (name, extra = []) => [name, ...extra];
 
-  // For registers we want both: absolute count and percent-of-max.
+  
   const regCount = (base) => [
     `${base}.avg.ratio`,
     `${base}.avg`,
@@ -51,15 +51,15 @@
     base
   ];
 
-  // ------------------------------
-  // Metrics used by this plugin
-  // ------------------------------
+  
+  
+  
   const METRICS = {
-    // Time
+    
     GPU_TIME: c('gpu__time_duration', g('GPU Duration', ['GPU Duration (ms)'])),
     GPU_ACTIVE: c('gpu__time_active'),
 
-    // RenderDoc pipeline stats (Generic)
+    
     SAMPLES_PASSED: g('Samples Passed'),
     PS_INVOCATIONS: g('PS Invocations'),
     VS_INVOCATIONS: g('VS Invocations'),
@@ -70,17 +70,17 @@
     GS_PRIMS: g('GS Primitives'),
     RASTERIZER_INVOCATIONS: g('Rasterizer Invocations'),
 
-    // DRAM traffic
+    
     DRAM_READ_BYTES: c('dram__bytes_op_read'),
     DRAM_WRITE_BYTES: c('dram__bytes_op_write'),
     DRAM_READ_SECTORS: c('dram__sectors_op_read'),
     DRAM_WRITE_SECTORS: c('dram__sectors_op_write'),
 
-    // Cache hit-rates
+    
     L1_HIT: r('l1tex__t_sector_hit_rate'),
     L2_HIT: r('lts__t_sector_hit_rate'),
 
-    // Instructions (all + per stage)
+    
     INST_ALL: c('sm__inst_executed'),
     INST_VS: c('smsp__inst_executed_shader_vs'),
     INST_TCS: c('smsp__inst_executed_shader_tcs'),
@@ -89,7 +89,7 @@
     INST_PS: c('smsp__inst_executed_shader_ps'),
     INST_CS: c('smsp__inst_executed_shader_cs'),
 
-    // Warp stall breakdown (0..1 or 0..100)
+    
     STALL_BARRIER: r('smsp__warp_issue_stalled_barrier_per_warp_active'),
     STALL_BRANCH: r('smsp__warp_issue_stalled_branch_resolving_per_warp_active'),
     STALL_DISPATCH: r('smsp__warp_issue_stalled_dispatch_stall_per_warp_active'),
@@ -110,7 +110,7 @@
     STALL_TEX: r('smsp__warp_issue_stalled_tex_throttle_per_warp_active'),
     STALL_WAIT: r('smsp__warp_issue_stalled_wait_per_warp_active'),
 
-    // Registers per thread
+    
     REGS_3D_COUNT: regCount('tpc__average_registers_per_thread_shader_3d'),
     REGS_3D_PCT: regPct('tpc__average_registers_per_thread_shader_3d'),
     REGS_PS_COUNT: regCount('tpc__average_registers_per_thread_shader_ps'),
@@ -120,7 +120,7 @@
     REGS_CS_COUNT: regCount('tpc__average_registers_per_thread_shader_cs'),
     REGS_CS_PCT: regPct('tpc__average_registers_per_thread_shader_cs'),
 
-    // Shared memory (to catch bank conflicts / heavy LDS usage)
+    
     SH_WF_ALL: c('l1tex__data_pipe_lsu_wavefronts_mem_shared'),
     SH_WF_LD: c('l1tex__data_pipe_lsu_wavefronts_mem_shared_op_ld'),
     SH_WF_ST: c('l1tex__data_pipe_lsu_wavefronts_mem_shared_op_st'),
@@ -129,37 +129,37 @@
     SH_BYTES_READ: c('smsp__bytes_mem_shared_cmd_read'),
     SH_BYTES_ATOM: c('smsp__bytes_mem_shared_cmd_atom'),
 
-    // Backend proxies (color/depth output traffic)
+    
     CROP_READ_SUBPK: c('crop__read_subpackets'),
     CROP_WRITE_SUBPK: c('crop__write_subpackets'),
     ZROP_READ_SUBPK: c('zrop__read_subpackets'),
     ZROP_WRITE_SUBPK: c('zrop__write_subpackets'),
   };
 
-  // ------------------------------
-  // Config / thresholds (heuristics)
-  // ------------------------------
+  
+  
+  
   const CFG = {
     ACTIVE_RATIO_LOW: 0.65,
 
     CACHE_LOW: 0.60,
     CACHE_OK: 0.75,
 
-    // Warp stall thresholds (these are proportions of warps per cycle)
+    
     STALL_SUSPECT: 0.15,
     STALL_HIGH: 0.25,
     STALL_VERY_HIGH: 0.40,
 
-    // Bank conflicts: conflicts per shared wavefront (rough heuristic)
+    
     BANKCONFLICT_HIGH: 0.30,
 
-    // Write-heavy traffic ratio
+    
     WRITE_HEAVY: 0.60,
   };
 
-  // ------------------------------
-  // Small math helpers
-  // ------------------------------
+  
+  
+  
   function quantile(arr, q) {
     if (!arr || arr.length === 0) return NaN;
     const a = Array.from(arr).filter(Number.isFinite).sort((x, y) => x - y);
@@ -177,7 +177,7 @@
     return Math.max(0, Math.min(1, x));
   }
 
-  // Normalize values that can appear as 0..1 or 0..100 (percent).
+  
   function to01(v, opts) {
     if (!Number.isFinite(v)) return NaN;
     const o = opts || {};
@@ -185,7 +185,7 @@
     const max = Number.isFinite(o.max) ? o.max : 9.99;
 
     let p = v;
-    if (p > 1.5) p = p / 100.0; // assume percent
+    if (p > 1.5) p = p / 100.0; 
     if (zeroIsNaN && p === 0) return NaN;
     if (p < 0) return NaN;
     if (p > max) return NaN;
@@ -217,13 +217,13 @@
     return utils.safeDiv(a, b);
   }
 
-  // ------------------------------
-  // Robust metric resolver (handles headers with unit suffix)
-  // ------------------------------
+  
+  
+  
   function normalizeHeader(h) {
     let s = String(h || '').trim();
     if (!s) return '';
-    // Strip trailing unit suffix: " ... (bytes)" / " ... (%)" / " ... (ms)" etc.
+    
     const m = s.match(/^(.*)\s+\([^)]*\)\s*$/);
     if (m) s = m[1];
     return s.trim().toLowerCase();
@@ -252,9 +252,9 @@
     };
   }
 
-  // ------------------------------
-  // Access helpers
-  // ------------------------------
+  
+  
+  
   function getAggSafe(agg, resolve, def, utils, missing, label) {
     const name = resolve(def);
     if (!name) {
@@ -279,9 +279,9 @@
     return out;
   }
 
-  // ------------------------------
-  // UI helpers
-  // ------------------------------
+  
+  
+  
   function makeMissingBox(container, missing) {
     if (!missing || missing.length === 0) return;
     const box = document.createElement('div');
@@ -292,7 +292,7 @@
     box.style.opacity = '0.9';
 
     const t = document.createElement('div');
-    t.textContent = `⚠️ Не хватает метрик (точность ниже): ${missing.length}`;
+    t.textContent = `⚠️ Missing metrics (accuracy reduced): ${missing.length}`;
     t.style.fontWeight = '700';
     t.style.marginBottom = '6px';
 
@@ -308,22 +308,22 @@
     container.appendChild(box);
   }
 
-  // ------------------------------
-  // Main render
-  // ------------------------------
+  
+  
+  
   function render(container, ctx) {
     container.innerHTML = '';
     const { node, agg, state, utils } = ctx;
 
     if (!node) {
-      container.innerHTML = '<div style="padding:10px">Выбери событие на таймлайне.</div>';
+      container.innerHTML = '<div style="padding:10px">Select an event on the timeline.</div>';
       return;
     }
 
     const headers = state.headers || [];
     const resolve = makeResolver(headers);
 
-    // Missing metrics (in this capture at all)
+    
     const missing = [];
     const metricKeys = Object.keys(METRICS);
     metricKeys.forEach((k) => {
@@ -335,11 +335,11 @@
 
     const coverage = metricKeys.length > 0 ? clamp01(1 - missing.length / metricKeys.length) : 1;
 
-    // ---- Read current metrics ----
+    
     let timeNs = getAggSafe(agg, resolve, METRICS.GPU_TIME, utils, missing, 'gpu time').v;
     const timeName = getAggSafe(agg, resolve, METRICS.GPU_TIME, utils).name;
 
-    // If we used GPU Duration (ms) or any header ending with "(ms)", convert to ns.
+    
     if (utils.isNumber(timeNs) && timeName) {
       const isMs =
         /ms\)?$/i.test(timeName) ||
@@ -366,14 +366,14 @@
     const l1Hit = to01(getAggSafe(agg, resolve, METRICS.L1_HIT, utils).v, { zeroIsNaN: true, max: 1.2 });
     const l2Hit = to01(getAggSafe(agg, resolve, METRICS.L2_HIT, utils).v, { zeroIsNaN: true, max: 1.2 });
 
-    // Generic pipeline stats (may be missing if not enabled)
+    
     const samples = getAggSafe(agg, resolve, METRICS.SAMPLES_PASSED, utils).v;
     const psInv = getAggSafe(agg, resolve, METRICS.PS_INVOCATIONS, utils).v;
     const vsInv = getAggSafe(agg, resolve, METRICS.VS_INVOCATIONS, utils).v;
     const csInv = getAggSafe(agg, resolve, METRICS.CS_INVOCATIONS, utils).v;
     const prims = getAggSafe(agg, resolve, METRICS.RASTERIZED_PRIMS, utils).v;
 
-    // Stalls (0..1)
+    
     const stalls = {
       barrier: to01(getAggSafe(agg, resolve, METRICS.STALL_BARRIER, utils).v),
       branch: to01(getAggSafe(agg, resolve, METRICS.STALL_BRANCH, utils).v),
@@ -396,7 +396,7 @@
       wait: to01(getAggSafe(agg, resolve, METRICS.STALL_WAIT, utils).v),
     };
 
-    // Registers (count + percent)
+    
     const regs = {
       psCount: getAggSafe(agg, resolve, METRICS.REGS_PS_COUNT, utils).v,
       psPct: to01(getAggSafe(agg, resolve, METRICS.REGS_PS_PCT, utils).v, { zeroIsNaN: true, max: 2 }),
@@ -408,7 +408,7 @@
       d3Pct: to01(getAggSafe(agg, resolve, METRICS.REGS_3D_PCT, utils).v, { zeroIsNaN: true, max: 2 }),
     };
 
-    // Shared memory
+    
     const sh = {
       wfAll: getAggSafe(agg, resolve, METRICS.SH_WF_ALL, utils).v,
       wfLd: getAggSafe(agg, resolve, METRICS.SH_WF_LD, utils).v,
@@ -419,7 +419,7 @@
       bytesAtom: getAggSafe(agg, resolve, METRICS.SH_BYTES_ATOM, utils).v,
     };
 
-    // Backend proxies (subpackets)
+    
     const backend = {
       cropR: getAggSafe(agg, resolve, METRICS.CROP_READ_SUBPK, utils).v,
       cropW: getAggSafe(agg, resolve, METRICS.CROP_WRITE_SUBPK, utils).v,
@@ -427,13 +427,13 @@
       zropW: getAggSafe(agg, resolve, METRICS.ZROP_WRITE_SUBPK, utils).v,
     };
 
-    // ---- Derived values ----
+    
     const activeRatio = (utils.isNumber(activeNs) && utils.isNumber(timeNs) && timeNs > 0)
       ? clamp01(activeNs / timeNs) : NaN;
 
     const dramBytes = (utils.isNumber(dramRead) ? dramRead : 0) + (utils.isNumber(dramWrite) ? dramWrite : 0);
     const dramBW = (utils.isNumber(dramBytes) && utils.isNumber(timeNs) && timeNs > 0)
-      ? (dramBytes * 1e9 / timeNs) : NaN; // bytes/sec
+      ? (dramBytes * 1e9 / timeNs) : NaN; 
 
     const writeRatio = (utils.isNumber(dramRead) && utils.isNumber(dramWrite) && (dramRead + dramWrite) > 0)
       ? clamp01(dramWrite / (dramRead + dramWrite)) : NaN;
@@ -450,18 +450,18 @@
     const csInst = utils.isNumber(instCS) ? instCS : 0;
     const sumStageInst = vtgInst + psInst + csInst;
 
-    // Dominant stage (best-effort)
-    const stage = { kind: 'Mixed', label: 'Смешанная нагрузка', share: NaN };
+    
+    const stage = { kind: 'Mixed', label: 'Mixed workload', share: NaN };
     if (sumStageInst > 0) {
       const pV = vtgInst / sumStageInst, pP = psInst / sumStageInst, pC = csInst / sumStageInst;
       const maxP = Math.max(pV, pP, pC);
       stage.share = maxP;
-      if (pC === maxP) { stage.kind = 'CS'; stage.label = 'Compute шейдер'; }
-      else if (pP === maxP) { stage.kind = 'PS'; stage.label = 'Пиксельный шейдер'; }
-      else { stage.kind = 'VTG'; stage.label = 'Вершины/тесселяция/геометрия'; }
-      if (maxP < 0.55) { stage.kind = 'Mixed'; stage.label = 'Смешанная нагрузка'; }
+      if (pC === maxP) { stage.kind = 'CS'; stage.label = 'Compute shader'; }
+      else if (pP === maxP) { stage.kind = 'PS'; stage.label = 'Pixel shader'; }
+      else { stage.kind = 'VTG'; stage.label = 'Vertex/Tessellation/Geometry'; }
+      if (maxP < 0.55) { stage.kind = 'Mixed'; stage.label = 'Mixed workload'; }
     } else {
-      // fallback by invocations
+      
       const invs = {
         CS: utils.isNumber(csInv) ? csInv : 0,
         PS: utils.isNumber(psInv) ? psInv : 0,
@@ -469,13 +469,13 @@
       };
       const maxInv = Math.max(invs.CS, invs.PS, invs.VTG);
       if (maxInv > 0) {
-        if (invs.CS === maxInv) { stage.kind = 'CS'; stage.label = 'Compute шейдер'; }
-        else if (invs.PS === maxInv) { stage.kind = 'PS'; stage.label = 'Пиксельный шейдер'; }
-        else { stage.kind = 'VTG'; stage.label = 'Вершины/тесселяция/геометрия'; }
+        if (invs.CS === maxInv) { stage.kind = 'CS'; stage.label = 'Compute shader'; }
+        else if (invs.PS === maxInv) { stage.kind = 'PS'; stage.label = 'Pixel shader'; }
+        else { stage.kind = 'VTG'; stage.label = 'Vertex/Tessellation/Geometry'; }
       }
     }
 
-    // Pick register metrics for the dominant stage (for advice)
+    
     let regCountNow = NaN, regPctNow = NaN;
     if (stage.kind === 'PS') { regCountNow = regs.psCount; regPctNow = regs.psPct; }
     else if (stage.kind === 'CS') { regCountNow = regs.csCount; regPctNow = regs.csPct; }
@@ -493,13 +493,13 @@
     const backendWriteRate = (utils.isNumber(backendWrites) && utils.isNumber(timeNs) && timeNs > 0)
       ? (backendWrites * 1e9 / timeNs) : NaN;
 
-    // ---- Baselines (p90) across capture ----
+    
     const timeHeader = resolve(METRICS.GPU_TIME);
     const readHeader = resolve(METRICS.DRAM_READ_BYTES);
     const writeHeader = resolve(METRICS.DRAM_WRITE_BYTES);
     const instHeader = resolve(METRICS.INST_ALL);
 
-    // Convert time per-row to ns if needed.
+    
     const isTimeMs = (timeHeader && (/ms\)?$/i.test(timeHeader) || (/^GPU Duration/i.test(timeHeader) && !/gpu__time_/i.test(timeHeader))));
 
     const dramBWArr = [];
@@ -555,21 +555,21 @@
     const backendWriteRateP90 = quantile(backendWriteRateArr, 0.90);
     const bankConfP90 = quantile(bankConfArr, 0.90);
 
-    // Cache evaluation
+    
     const cacheKnown = Number.isFinite(l1Hit) || Number.isFinite(l2Hit);
     const cacheBad = cacheKnown && (
       (Number.isFinite(l1Hit) && l1Hit < CFG.CACHE_LOW) ||
       (Number.isFinite(l2Hit) && l2Hit < CFG.CACHE_LOW)
     );
 
-    // ---- Helper: top stalls ----
+    
     const stallList = [
-      { k: 'long', label: 'Long scoreboard (ожидание данных)', v: stalls.long },
+      { k: 'long', label: 'Long scoreboard (waiting on data)', v: stalls.long },
       { k: 'longL1tex', label: 'Long scoreboard L1TEX', v: stalls.longL1tex },
       { k: 'tex', label: 'Texture throttle', v: stalls.tex },
       { k: 'math', label: 'Math pipe throttle', v: stalls.math },
-      { k: 'lg', label: 'LG throttle (LSU очередь)', v: stalls.lg },
-      { k: 'notSelected', label: 'Not selected (низкая заселённость)', v: stalls.notSelected },
+      { k: 'lg', label: 'LG throttle (LSU queue)', v: stalls.lg },
+      { k: 'notSelected', label: 'Not selected (low occupancy)', v: stalls.notSelected },
       { k: 'branch', label: 'Branch resolving', v: stalls.branch },
       { k: 'barrier', label: 'Barrier', v: stalls.barrier },
       { k: 'membar', label: 'Membar', v: stalls.membar },
@@ -586,15 +586,15 @@
     stallList.sort((a, b) => b.v - a.v);
     const topStalls = stallList.slice(0, 3);
 
-    // ------------------------------
-    // Candidate scoring
-    // ------------------------------
+    
+    
+    
     const candidates = [];
     const add = (id, title, icon, score, why, check, fix) => {
       candidates.push({ id, title, icon, score: clamp01(score), why, check, fix });
     };
 
-    // 1) GPU idle / sync / CPU-side limitation
+    
     if (Number.isFinite(activeRatio) && utils.isNumber(timeNs) && timeNs > 0) {
       const s = activeRatio < CFG.ACTIVE_RATIO_LOW
         ? clamp01((CFG.ACTIVE_RATIO_LOW - activeRatio) / 0.35)
@@ -602,31 +602,31 @@
       if (s > 0.12) {
         add(
           'idle',
-          'GPU простаивает (похоже на CPU/sync ограничение)',
+          'GPU is idle (likely CPU/sync bound)',
           '⏳',
           s,
           [
-            `Доля активной работы GPU низкая: <b>${fmtPct01(activeRatio)}</b>.`,
-            'Это часто означает ожидание: синхронизация CPU↔GPU, лимит по CPU, либо ожидание Present/VSync.',
+            `GPU active ratio is low: <b>${fmtPct01(activeRatio)}</b>.`,
+            'This often means waiting: CPU↔GPU sync, CPU bottleneck, or waiting on Present/VSync.',
           ],
-          'Быстрый тест: уменьши разрешение/качество. Если <b>GPU Duration почти не меняется</b> — узкое место не в этом draw по GPU, а выше (CPU/синхронизация).',
+          'Quick test: reduce resolution/quality. If <b>GPU Duration barely changes</b>, the bottleneck is not this draw on GPU but higher up (CPU/sync).',
           [
-            'Снизить количество draw/dispatch: батчинг, инстансинг, объединение материалов.',
-            'Убрать синхронизации (readback, Map/Unmap с ожиданием, слишком ранний `WaitForIdle`).',
-            'Проверить VSync / ограничители FPS / ожидание swapchain.',
+            'Reduce draw/dispatch count: batching, instancing, material merging.',
+            'Remove sync points (readback, Map/Unmap with waits, overly early `WaitForIdle`).',
+            'Check VSync / FPS limiters / swapchain waits.',
           ]
         );
       }
     }
 
-    // Helper numbers for memory
+    
     const memBWRel = (Number.isFinite(dramBW) && Number.isFinite(dramBWP90) && dramBWP90 > 0)
       ? dramBW / dramBWP90 : NaN;
 
     const bpiRel = (Number.isFinite(bytesPerInst) && Number.isFinite(bytesPerInstP90) && bytesPerInstP90 > 0)
       ? bytesPerInst / bytesPerInstP90 : NaN;
 
-    // 2) Texture pipe bound
+    
     {
       const tex = stalls.tex;
       const longL1 = stalls.longL1tex;
@@ -636,29 +636,29 @@
         if (Number.isFinite(longL1)) s += 0.25 * clamp01((longL1 - 0.10) / 0.30);
         if (cacheBad) s += 0.10;
       }
-      if (stage.kind === 'VTG') s *= 0.75; // texture in vertex exists, but чаще PS/CS
+      if (stage.kind === 'VTG') s *= 0.75; 
       if (s > 0.18) {
         add(
           'tex',
-          'Ограничение в texture/L1TEX (много выборок, ждём текстуры)',
+          'Texture/L1TEX bound (many fetches, waiting on textures)',
           '🧵',
           s,
           [
             `Texture throttle: <b>${fmtPct01(tex)}</b>${Number.isFinite(longL1) ? `, long-scoreboard(L1TEX): <b>${fmtPct01(longL1)}</b>` : ''}.`,
-            cacheKnown ? `Hit-rate: L1 ~ <b>${fmtPct01(l1Hit)}</b>, L2 ~ <b>${fmtPct01(l2Hit)}</b>.` : 'Hit-rate кэшей недоступен.',
-            Number.isFinite(memBWRel) ? `DRAM BW относительно сцены: ~ <b>${(memBWRel * 100).toFixed(0)}%</b> от p90.` : 'DRAM BW baseline недоступен.',
+            cacheKnown ? `Hit-rate: L1 ~ <b>${fmtPct01(l1Hit)}</b>, L2 ~ <b>${fmtPct01(l2Hit)}</b>.` : 'Cache hit rates unavailable.',
+            Number.isFinite(memBWRel) ? `DRAM BW relative to scene: ~ <b>${(memBWRel * 100).toFixed(0)}%</b> of p90.` : 'DRAM BW baseline unavailable.',
           ],
-          'Проверка: временно уменьши число выборок текстур (замени текстуры на 1×1/LOD bias, отключи анизотропию) — <b>GPU Duration должна заметно упасть</b>.',
+          'Check: temporarily reduce texture fetches (swap to 1×1 textures / LOD bias, disable anisotropy) — <b>GPU Duration should drop noticeably</b>.',
           [
-            'Сократить число текстурных выборок (особенно в циклах).',
-            'Понизить LOD/разрешение текстур для этого прохода, использовать более компактные форматы.',
-            'Улучшить локальность: атласы, меньше разнородных текстур, избегать случайного доступа.',
+            'Reduce texture fetch count (especially in loops).',
+            'Lower texture LOD/resolution for this pass, use more compact formats.',
+            'Improve locality: atlases, fewer heterogeneous textures, avoid random access.',
           ]
         );
       }
     }
 
-    // 3) Memory latency (long scoreboard)
+    
     {
       const long = stalls.long;
       const longL1 = stalls.longL1tex;
@@ -673,25 +673,25 @@
       if (s > 0.18) {
         add(
           'mem-lat',
-          'Ограничение по памяти (ожидание данных / cache-miss)',
+          'Memory bound (waiting on data / cache misses)',
           '📦',
           s,
           [
-            `Long scoreboard: <b>${fmtPct01(long)}</b>${Number.isFinite(longL1) ? ` (L1TEX часть: <b>${fmtPct01(longL1)}</b>)` : ''}.`,
-            cacheKnown ? `Hit-rate: L1 ~ <b>${fmtPct01(l1Hit)}</b>, L2 ~ <b>${fmtPct01(l2Hit)}</b>.` : 'Hit-rate кэшей недоступен.',
+            `Long scoreboard: <b>${fmtPct01(long)}</b>${Number.isFinite(longL1) ? ` (L1TEX portion: <b>${fmtPct01(longL1)}</b>)` : ''}.`,
+            cacheKnown ? `Hit-rate: L1 ~ <b>${fmtPct01(l1Hit)}</b>, L2 ~ <b>${fmtPct01(l2Hit)}</b>.` : 'Cache hit rates unavailable.',
             `DRAM: read <b>${fmtMaybeInt(utils, dramRead)}</b>, write <b>${fmtMaybeInt(utils, dramWrite)}</b>, BW ~ <b>${fmtMaybeGBps(utils, dramBytes, timeNs)}</b>.`,
           ],
-          'Проверка: временно сократи чтения/записи (например, отключи один буфер/текстуру или подставь константу вместо выборки). Если <b>GPU Duration падает</b> — это память.',
+          'Check: temporarily reduce reads/writes (e.g., disable a buffer/texture or use a constant instead of a fetch). If <b>GPU Duration drops</b>, it is memory.',
           [
-            'Уплотнить данные (меньше байт на элемент), использовать более компактные форматы.',
-            'Повысить локальность: последовательный доступ, уменьшить «прыгающие» индексы.',
-            'Сократить количество обращений к памяти: кешировать в регистрах/ shared, объединять чтения.',
+            'Pack data (fewer bytes per element), use more compact formats.',
+            'Improve locality: sequential access, reduce “jumping” indices.',
+            'Reduce memory accesses: cache in registers/shared, combine reads.',
           ]
         );
       }
     }
 
-    // 4) LSU/Load-Store queue pressure (LG throttle)
+    
     {
       const lg = stalls.lg;
       let s = 0;
@@ -702,24 +702,24 @@
       if (s > 0.18) {
         add(
           'lsu',
-          'Слишком много LD/ST (LSU очередь забита)',
+          'Too many LD/ST (LSU queue saturated)',
           '🚚',
           s,
           [
             `LG throttle: <b>${fmtPct01(lg)}</b>.`,
-            Number.isFinite(bytesPerInst) ? `Bytes/inst ~ <b>${bytesPerInst.toFixed(2)}</b> (отн. к p90: ${Number.isFinite(bpiRel) ? (bpiRel*100).toFixed(0)+'%' : 'n/a'}).` : 'Bytes/inst недоступен.',
+            Number.isFinite(bytesPerInst) ? `Bytes/inst ~ <b>${bytesPerInst.toFixed(2)}</b> (rel. to p90: ${Number.isFinite(bpiRel) ? (bpiRel*100).toFixed(0)+'%' : 'n/a'}).` : 'Bytes/inst unavailable.',
           ],
-          'Проверка: убери часть чтений/записей (например, один массив/RT), либо сделай «пустой» шейдер — `lg_throttle` и GPU Duration должны снизиться.',
+          'Check: remove some reads/writes (e.g., one array/RT) or use an “empty” shader — `lg_throttle` and GPU Duration should drop.',
           [
-            'Свести несколько обращений в одно (векторные загрузки, упаковка данных).',
-            'Избегать лишних записей, писать только то что нужно (mask/branch).',
-            'Стараться читать/писать последовательно (coalescing), уменьшать разброс адресов.',
+            'Combine multiple accesses into one (vector loads, data packing).',
+            'Avoid unnecessary writes; write only what is needed (mask/branch).',
+            'Aim for sequential reads/writes (coalescing), reduce address scatter.',
           ]
         );
       }
     }
 
-    // 5) Compute/ALU bound (math pipe)
+    
     {
       const math = stalls.math;
       const long = stalls.long;
@@ -732,25 +732,25 @@
       if (s > 0.18) {
         add(
           'alu',
-          'Ограничение по вычислениям (ALU/Math pipe)',
+          'Compute bound (ALU/Math pipe)',
           '🧮',
           s,
           [
             `Math pipe throttle: <b>${fmtPct01(math)}</b>.`,
-            Number.isFinite(instAll) ? `Инструкций выполнено: <b>${fmtMaybeInt(utils, instAll)}</b>.` : 'Инструкции: n/a.',
-            `Время GPU: <b>${fmtMaybeNs(utils, timeNs)}</b>.`,
+            Number.isFinite(instAll) ? `Instructions executed: <b>${fmtMaybeInt(utils, instAll)}</b>.` : 'Instructions: n/a.',
+            `GPU time: <b>${fmtMaybeNs(utils, timeNs)}</b>.`,
           ],
-          'Проверка: упрости шейдер (убери циклы/дорогие функции типа pow/exp/sin, снизь качество) — время должно заметно уменьшиться.',
+          'Check: simplify the shader (remove loops/expensive functions like pow/exp/sin, reduce quality) — time should drop noticeably.',
           [
-            'Убрать/сократить циклы, уменьшить количество операций на пиксель/вершину.',
-            'Заменять дорогие функции приближениями, использовать LUT где уместно.',
-            'Снижать точность там где можно (half/mediump), избегать лишних нормализаций.',
+            'Remove/shorten loops, reduce ops per pixel/vertex.',
+            'Replace expensive functions with approximations; use LUTs where appropriate.',
+            'Lower precision where possible (half/mediump), avoid unnecessary normalizations.',
           ]
         );
       }
     }
 
-    // 6) Occupancy / register pressure (not selected)
+    
     {
       const ns = stalls.notSelected;
       let s = 0;
@@ -762,25 +762,25 @@
       if (s > 0.18) {
         add(
           'occ',
-          'Низкая заселённость (регистры/ресурсы ограничивают occupancy)',
+          'Low occupancy (registers/resources limiting occupancy)',
           '🧩',
           s,
           [
-            `Not selected: <b>${fmtPct01(ns)}</b> — много варпов не может быть запущено параллельно.`,
-            Number.isFinite(regCountNow) ? `Регистры на поток: ~ <b>${regCountNow.toFixed(0)}</b>${Number.isFinite(regPctNow) ? ` (${fmtPct01(regPctNow)} от максимума)` : ''}.` : (Number.isFinite(regPctNow) ? `Регистры (pct): <b>${fmtPct01(regPctNow)}</b>.` : 'Регистры: n/a.'),
-            `Доминирующая стадия: <b>${stage.label}</b>.`,
+            `Not selected: <b>${fmtPct01(ns)}</b> — many warps cannot run in parallel.`,
+            Number.isFinite(regCountNow) ? `Registers per thread: ~ <b>${regCountNow.toFixed(0)}</b>${Number.isFinite(regPctNow) ? ` (${fmtPct01(regPctNow)} of max)` : ''}.` : (Number.isFinite(regPctNow) ? `Registers (pct): <b>${fmtPct01(regPctNow)}</b>.` : 'Registers: n/a.'),
+            `Dominant stage: <b>${stage.label}</b>.`,
           ],
-          'Проверка: попробуй снизить давление по регистрам (убрать unroll, разбить шейдер, ограничить регистры при компиляции) — `not_selected` должен уменьшиться, а GPU Duration — снизиться.',
+          'Check: try reducing register pressure (remove unroll, split the shader, limit registers at compile time) — `not_selected` should drop and GPU Duration should go down.',
           [
-            'Сократить количество временных переменных и больших локальных массивов.',
-            'Избегать агрессивной развёртки циклов (unroll) — она раздувает регистры.',
-            'Для compute: подобрать размер группы (block size), чтобы улучшить occupancy.',
+            'Reduce temporary variables and large local arrays.',
+            'Avoid aggressive loop unrolling — it inflates register usage.',
+            'For compute: tune group size (block size) to improve occupancy.',
           ]
         );
       }
     }
 
-    // 7) Branch divergence
+    
     {
       const br = stalls.branch;
       let s = 0;
@@ -790,52 +790,52 @@
       if (s > 0.18) {
         add(
           'branch',
-          'Ветвления/дивергенция (warps расходятся по путям)',
+          'Branch divergence (warps take different paths)',
           '🌿',
           s,
           [
             `Branch resolving: <b>${fmtPct01(br)}</b>.`,
-            `Стадия: <b>${stage.label}</b>.`,
+            `Stage: <b>${stage.label}</b>.`,
           ],
-          'Проверка: сделай ветку константной (временно «заставь» один путь) — если время падает, проблема в divergence.',
+          'Check: force a constant branch (temporarily) — if time drops, divergence is the issue.',
           [
-            'Стараться, чтобы потоки в одном варпе шли по одному пути (упорядочить данные, сгруппировать случаи).',
-            'Заменять ветвления на предикацию там, где это проще и выгоднее.',
-            'Избегать вложенных веток и ранних выходов в горячем коде.',
+            'Try to keep threads in a warp on the same path (reorder data, group cases).',
+            'Replace branches with predication where simpler and beneficial.',
+            'Avoid nested branches and early exits in hot code.',
           ]
         );
       }
     }
 
-    // 8) Synchronization / barriers
+    
     {
       const b = stalls.barrier;
       let s = 0;
       if (Number.isFinite(b)) {
         s = clamp01((b - 0.08) / 0.25);
-        if (stage.kind !== 'CS') s *= 0.85; // barrier чаще про compute
+        if (stage.kind !== 'CS') s *= 0.85; 
       }
       if (s > 0.18) {
         add(
           'barrier',
-          'Синхронизация (barrier) тормозит выполнение',
+          'Synchronization (barrier) is slowing execution',
           '🧱',
           s,
           [
             `Barrier stall: <b>${fmtPct01(b)}</b>.`,
-            `Стадия: <b>${stage.label}</b>.`,
+            `Stage: <b>${stage.label}</b>.`,
           ],
-          'Проверка: если это compute — попробуй убрать/реже делать `barrier()`/`GroupMemoryBarrier...` (на время эксперимента). GPU Duration должна уменьшиться.',
+          'Check: if this is compute, try removing/reducing `barrier()`/`GroupMemoryBarrier...` (for an experiment). GPU Duration should decrease.',
           [
-            'Сократить число барьеров, объединять работу между барьерами.',
-            'Использовать warp-level примитивы вместо block-level синхронизации, где возможно.',
-            'Снизить размер группы (или изменить разбиение данных), чтобы уменьшить ожидание.',
+            'Reduce the number of barriers; group work between barriers.',
+            'Use warp-level primitives instead of block-level sync where possible.',
+            'Reduce group size (or change data tiling) to reduce waiting.',
           ]
         );
       }
     }
 
-    // 9) Memory barriers / atomics
+    
     {
       const mb = stalls.membar;
       let s = 0;
@@ -845,24 +845,24 @@
       if (s > 0.18) {
         add(
           'membar',
-          'Ожидание из-за atomics / memory barriers',
+          'Stalls due to atomics / memory barriers',
           '🧲',
           s,
           [
             `Membar stall: <b>${fmtPct01(mb)}</b>.`,
-            Number.isFinite(writeRatio) ? `Доля записей в DRAM: <b>${fmtPct01(writeRatio)}</b>.` : '',
+            Number.isFinite(writeRatio) ? `DRAM write share: <b>${fmtPct01(writeRatio)}</b>.` : '',
           ].filter(Boolean),
-          'Проверка: убери атомики/фенсы (или замени на локальное накопление с редукцией) — время должно упасть.',
+          'Check: remove atomics/fences (or replace with local accumulation + reduction) — time should drop.',
           [
-            'Свести атомики к минимуму: делать редукцию в shared/warp, потом один атомик.',
-            'Разбить данные так, чтобы уменьшить контеншн (меньше потоков пишут в один адрес).',
-            'Избегать лишних memory fences.',
+            'Minimize atomics: reduce in shared/warp, then one atomic.',
+            'Partition data to reduce contention (fewer threads writing to one address).',
+            'Avoid unnecessary memory fences.',
           ]
         );
       }
     }
 
-    // 10) Instruction fetch / too large shader
+    
     {
       const ni = stalls.noInstr;
       let s = 0;
@@ -872,24 +872,24 @@
       if (s > 0.18) {
         add(
           'icache',
-          'Проблема с выборкой инструкций (слишком большой/сложный шейдер)',
+          'Instruction fetch bound (shader too large/complex)',
           '📜',
           s,
           [
             `No-instruction stall: <b>${fmtPct01(ni)}</b>.`,
-            'Часто это связано с большим кодом (много вариантов, unroll, много функций).',
+            'Often caused by large code (many variants, unrolls, many functions).',
           ],
-          'Проверка: отключи части шейдера (фичи/ветки), убери unroll — если `no_instruction` падает и время улучшается, проблема в размере/структуре кода.',
+          'Check: disable parts of the shader (features/branches), remove unroll — if `no_instruction` drops and time improves, it is code size/structure.',
           [
-            'Уменьшить размер шейдера: убрать лишние ветки, разделить на несколько проходов.',
-            'Ограничить unroll и специализации, которые раздувают код.',
-            'Переиспользовать общие функции, избегать дублирования.',
+            'Reduce shader size: remove extra branches, split into multiple passes.',
+            'Limit unroll and specializations that bloat code.',
+            'Reuse common functions, avoid duplication.',
           ]
         );
       }
     }
 
-    // 11) Shared memory bank conflicts
+    
     {
       let s = 0;
       if (Number.isFinite(bankConfPerWf) && bankConfPerWf > 0) {
@@ -900,7 +900,7 @@
       if (s > 0.18) {
         add(
           'shmem',
-          'Shared memory конфликтует (bank conflicts / сериализация)',
+          'Shared memory conflicts (bank conflicts / serialization)',
           '🏦',
           s,
           [
@@ -908,17 +908,17 @@
             Number.isFinite(stalls.short) ? `Short scoreboard: <b>${fmtPct01(stalls.short)}</b>.` : '',
             `Shared bytes: ~ <b>${fmtMaybeGBps(utils, shBytes, timeNs)}</b>.`,
           ].filter(Boolean),
-          'Проверка: попробуй поменять раскладку shared (padding/strides) или способ доступа — bank conflicts должны снизиться, и время уменьшится.',
+          'Check: change shared layout (padding/strides) or access pattern — bank conflicts should drop and time should improve.',
           [
-            'Добавить padding, чтобы разные потоки обращались к разным банкам.',
-            'Сделать доступ более «линейным»: избегать адресов с одинаковыми нижними битами.',
-            'Использовать vectorized loads/stores (например, float2/float4) где это уместно.',
+            'Add padding so different threads hit different banks.',
+            'Make access more linear: avoid addresses with the same low bits.',
+            'Use vectorized loads/stores (e.g., float2/float4) where appropriate.',
           ]
         );
       }
     }
 
-    // 12) Backend/output bound (fill/blend/depth) — proxy via subpackets + write ratio
+    
     {
       let s = 0;
       if (Number.isFinite(backendWriteRate) && Number.isFinite(backendWriteRateP90) && backendWriteRateP90 > 0) {
@@ -934,48 +934,48 @@
         const which = (backend.zropW > backend.cropW) ? 'ZROP (depth/stencil)' : 'CROP (color/blend)';
         add(
           'backend',
-          `Backend/ROP ограничивает скорость (${which})`,
+          `Backend/ROP is the bottleneck (${which})`,
           '🖍️',
           s,
           [
             Number.isFinite(backendWriteRate) && Number.isFinite(backendWriteRateP90)
-              ? `Скорость записей (subpackets): ~ <b>${(backendWriteRate / backendWriteRateP90 * 100).toFixed(0)}%</b> от p90 по кадру.`
-              : 'Скорость subpackets недоступна (нет baseline).',
-            Number.isFinite(writeRatio) ? `Доля записей в DRAM: <b>${fmtPct01(writeRatio)}</b>.` : 'Доля записей: n/a.',
+              ? `Write rate (subpackets): ~ <b>${(backendWriteRate / backendWriteRateP90 * 100).toFixed(0)}%</b> of frame p90.`
+              : 'Subpacket rate unavailable (no baseline).',
+            Number.isFinite(writeRatio) ? `DRAM write share: <b>${fmtPct01(writeRatio)}</b>.` : 'Write share: n/a.',
             utils.isNumber(samples) ? `Samples passed: <b>${fmtMaybeInt(utils, samples)}</b>.` : '',
           ].filter(Boolean),
-          'Проверка: уменьшить разрешение или сократить площадь рисования (scissor/LOD/куллинг), отключить MSAA/blending — время должно падать почти пропорционально.',
+          'Check: reduce resolution or draw area (scissor/LOD/culling), disable MSAA/blending — time should drop nearly proportionally.',
           [
-            'Снизить overdraw: сортировка по глубине, early-z, отбрасывание невидимого.',
-            'Сократить количество render targets и/или перейти на более лёгкие форматы.',
-            'Уменьшить MSAA/разрешение для этого прохода, использовать динамическое разрешение.',
+            'Reduce overdraw: depth sorting, early-z, cull invisible.',
+            'Reduce render targets and/or use lighter formats.',
+            'Reduce MSAA/resolution for this pass, use dynamic resolution.',
           ]
         );
       }
     }
 
-    // If nothing scored well, still provide a reasonable fallback based on top stalls
+    
     if (candidates.length === 0) {
       const top = topStalls[0];
-      const hint = top ? `Самый заметный stall: <b>${top.label}</b> (${fmtPct01(top.v)}).` : 'Данных мало.';
+      const hint = top ? `Top stall: <b>${top.label}</b> (${fmtPct01(top.v)}).` : 'Not enough data.';
       add(
         'unknown',
-        'Недостаточно данных для уверенного диагноза',
+        'Not enough data for a confident diagnosis',
         '❓',
         0.12,
         [
           hint,
-          'Убедись, что включены метрики из набора BoundDetectorAdvanced.metrics.renderdoc.json и повтори захват.'
+          'Make sure metrics from BoundDetectorAdvanced.metrics.renderdoc.json are enabled and recapture.'
         ],
-        'Проверка: включи метрики, повтори захват, затем сравни несколько drawcall — где время больше и stall выше, там и узкое место.',
+        'Check: enable metrics, recapture, then compare a few drawcalls — where time is higher and stall is higher, that is the bottleneck.',
         [
-          'Собрать метрики для проблемного кадра.',
-          'Сравнить похожие drawcalls: что отличается (пиксели, текстуры, шейдер, RT).',
+          'Collect metrics for the problematic frame.',
+          'Compare similar drawcalls: what differs (pixels, textures, shader, RT).',
         ]
       );
     }
 
-    // Pick best candidate
+    
     candidates.sort((a, b) => b.score - a.score);
     const best = candidates[0];
     const second = candidates[1] || { score: 0 };
@@ -983,9 +983,9 @@
     let confidence = clamp01(best.score * 0.85 + coverage * 0.25 - Math.min(0.25, second.score * 0.35));
     if (!utils.isNumber(timeNs) || timeNs <= 0) confidence *= 0.5;
 
-    // ------------------------------
-    // Render UI
-    // ------------------------------
+    
+    
+    
     const root = document.createElement('div');
     root.style.padding = '10px';
     root.style.display = 'flex';
@@ -998,7 +998,7 @@
     card.style.padding = '12px';
     card.style.background = 'var(--panel-bg-color, rgba(0,0,0,0.02))';
 
-    // Header row
+    
     const headerRow = document.createElement('div');
     headerRow.style.display = 'flex';
     headerRow.style.gap = '10px';
@@ -1026,10 +1026,10 @@
     meta.style.opacity = '0.85';
 
     const confLabel = document.createElement('span');
-    confLabel.textContent = `Уверенность: ${(confidence * 100).toFixed(0)}%`;
+    confLabel.textContent = `Confidence: ${(confidence * 100).toFixed(0)}%`;
 
     const stageLabel = document.createElement('span');
-    stageLabel.innerHTML = `Стадия: <b>${stage.label}</b>`;
+    stageLabel.innerHTML = `Stage: <b>${stage.label}</b>`;
 
     const timeLabel = document.createElement('span');
     timeLabel.innerHTML = `GPU: <b>${fmtMaybeNs(utils, timeNs)}</b>`;
@@ -1042,7 +1042,7 @@
     meta.appendChild(timeLabel);
     meta.appendChild(bwLabel);
 
-    // top stalls quick glance
+    
     if (topStalls.length) {
       const s = topStalls.map(x => `${x.label}: <b>${fmtPct01(x.v)}</b>`).join(' · ');
       const stallsLine = document.createElement('span');
@@ -1057,7 +1057,7 @@
     headerRow.appendChild(titleCol);
     card.appendChild(headerRow);
 
-    // Why section
+    
     if (best.why && best.why.length) {
       const whyBox = document.createElement('div');
       whyBox.style.marginTop = '12px';
@@ -1065,7 +1065,7 @@
       whyBox.style.borderTop = '1px solid var(--border-color)';
 
       const whyT = document.createElement('div');
-      whyT.textContent = 'Почему я так думаю';
+      whyT.textContent = 'Why I think this';
       whyT.style.fontWeight = '800';
       whyT.style.marginBottom = '6px';
 
@@ -1085,14 +1085,14 @@
       card.appendChild(whyBox);
     }
 
-    // Check section
+    
     const checkBox = document.createElement('div');
     checkBox.style.marginTop = '12px';
     checkBox.style.paddingTop = '10px';
     checkBox.style.borderTop = '1px solid var(--border-color)';
 
     const checkT = document.createElement('div');
-    checkT.textContent = 'Как быстро проверить';
+    checkT.textContent = 'How to quickly verify';
     checkT.style.fontWeight = '800';
     checkT.style.marginBottom = '6px';
 
@@ -1105,14 +1105,14 @@
     checkBox.appendChild(checkP);
     card.appendChild(checkBox);
 
-    // Fix section
+    
     const fixBox = document.createElement('div');
     fixBox.style.marginTop = '12px';
     fixBox.style.paddingTop = '10px';
     fixBox.style.borderTop = '1px solid var(--border-color)';
 
     const fixT = document.createElement('div');
-    fixT.textContent = 'Что делать';
+    fixT.textContent = 'What to do';
     fixT.style.fontWeight = '800';
     fixT.style.marginBottom = '6px';
 
@@ -1140,15 +1140,15 @@
 
     root.appendChild(card);
 
-    // Missing metrics hint
+    
     makeMissingBox(root, missing);
 
-    // Small hint
+    
     const hint = document.createElement('div');
     hint.style.fontSize = '12px';
     hint.style.opacity = '0.75';
     hint.style.marginTop = '4px';
-    hint.innerHTML = '💡 Подсказка: если причина связана с шейдером, включи в RenderDoc <b>Shader Debug</b> / <b>Shader Viewer</b> и проверь самые "дорогие" участки (циклы, ветки, выборки текстур, лишние записи).';
+    hint.innerHTML = '💡 Tip: if the cause is shader-related, enable <b>Shader Debug</b> / <b>Shader Viewer</b> in RenderDoc and check the most expensive parts (loops, branches, texture fetches, extra writes).';
     root.appendChild(hint);
 
     container.appendChild(root);
@@ -1157,7 +1157,7 @@
   PluginManager.register({
     id: TAB_ID,
     name: TAB_NAME,
-    description: 'Диагноз bottleneck для выбранного drawcall/dispatch (работает на валидных counters).',
+    description: 'Bottleneck diagnosis for the selected drawcall/dispatch (works with valid counters).',
     order: TAB_ORDER,
     render
   });
