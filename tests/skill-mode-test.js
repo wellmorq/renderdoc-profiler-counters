@@ -118,6 +118,15 @@ try {
     fs.writeFileSync(path.join(incompleteInput, 'events.txt'), events);
     await assert.rejects(() => prepare(incompleteInput, path.join(tempRoot, 'incomplete-output')), /same number of events TXT and counters CSV/);
 
+    const sparseInput = path.join(tempRoot, 'sparse-input');
+    fs.mkdirSync(sparseInput);
+    fs.writeFileSync(path.join(sparseInput, 'events.txt'), 'Sparse fixture\n---\n1 | - RootA |\n2 | - RootB |\n');
+    fs.writeFileSync(path.join(sparseInput, 'counters.csv'), 'EID,GPU Duration (ms),demo.min,demo.avg\n1,1,0,0\n2,1,5,10\n');
+    const sparse = await prepare(sparseInput, path.join(tempRoot, 'sparse-output'));
+    const sparseQuery = await queryCase(sparse.caseDir, 'Root');
+    assert.equal(sparseQuery.captures[0].metrics['demo.min'], 0);
+    assert.equal(sparseQuery.captures[0].metrics['demo.avg'], 5);
+
     const catalog = JSON.parse(fs.readFileSync(path.join(skill, 'references', 'nvidia-counters.json'), 'utf8'));
     assert.ok(catalog.entries.length >= 30);
     assert.ok(catalog.entries.some(entry => entry.prefix.includes('long_scoreboard')));

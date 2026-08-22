@@ -60,12 +60,12 @@ function aggregate(records, capture) {
     const result = {};
     for (const header of capture.headers) {
         if (capture.counterKinds[header] === 'max') {
-            const values = records.map(record => record.metrics[header]).filter(Number.isFinite);
+            const values = records.map(record => record.metrics[header] ?? 0).filter(Number.isFinite);
             result[header] = values.length ? values.reduce((maximum, value) => Math.max(maximum, value), -Infinity) : 0;
             continue;
         }
         if (capture.counterKinds[header] === 'min') {
-            const values = records.map(record => record.metrics[header]).filter(Number.isFinite);
+            const values = records.map(record => record.metrics[header] ?? 0).filter(Number.isFinite);
             result[header] = values.length ? values.reduce((minimum, value) => Math.min(minimum, value), Infinity) : 0;
             continue;
         }
@@ -78,7 +78,7 @@ function aggregate(records, capture) {
         let sum = 0;
         let count = 0;
         for (const record of records) {
-            const value = record.metrics[header];
+            const value = record.metrics[header] ?? 0;
             if (!Number.isFinite(value)) continue;
             sum += value;
             count++;
