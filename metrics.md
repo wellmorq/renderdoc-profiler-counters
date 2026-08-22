@@ -1,4 +1,4 @@
-# BoundDetectorAdvanced — RenderDoc metrics pack (extended)
+# RenderDoc performance investigation metrics pack (extended)
 
 ## Generic (RenderDoc pipeline stats)
   - `GPU Duration` / `GPU Duration (ms)`

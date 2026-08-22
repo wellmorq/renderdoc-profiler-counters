@@ -1,0 +1,491 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>RenderDoc performance report</title>
+    <style>
+        :root {
+            color-scheme: dark;
+            --bg: #0b1020;
+            --surface: #121a2d;
+            --surface-2: #182238;
+            --surface-3: #202c45;
+            --text: #edf2ff;
+            --muted: #94a3bd;
+            --border: #2a3855;
+            --accent: #78a9ff;
+            --accent-soft: rgba(120, 169, 255, .14);
+            --good: #61d6a3;
+            --bad: #ff7d90;
+            --warn: #f4c76b;
+            --shadow: 0 20px 55px rgba(0, 0, 0, .28);
+        }
+        :root[data-theme="light"] {
+            color-scheme: light;
+            --bg: #eef2f8;
+            --surface: #ffffff;
+            --surface-2: #f6f8fc;
+            --surface-3: #e9eef7;
+            --text: #172033;
+            --muted: #5f6d85;
+            --border: #d5ddea;
+            --accent: #315fba;
+            --accent-soft: rgba(49, 95, 186, .1);
+            --good: #167a55;
+            --bad: #b72845;
+            --warn: #8d6414;
+            --shadow: 0 18px 45px rgba(41, 55, 85, .12);
+        }
+        * { box-sizing: border-box; }
+        body { margin: 0; min-height: 100vh; background: var(--bg); color: var(--text); font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+        button, input, select { font: inherit; }
+        button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+        .app-header { position: sticky; top: 0; z-index: 20; display: flex; align-items: center; gap: 18px; min-height: 68px; padding: 12px 24px; border-bottom: 1px solid var(--border); background: color-mix(in srgb, var(--bg) 84%, transparent); backdrop-filter: blur(18px); }
+        .brand { min-width: 255px; }
+        .brand-title { font-size: 15px; font-weight: 750; letter-spacing: .015em; }
+        .brand-subtitle { margin-top: 3px; color: var(--muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 48vw; }
+        .mode-tabs { display: flex; gap: 6px; flex: 1; }
+        .mode-tab, .icon-btn, .sort-select { border: 1px solid var(--border); border-radius: 9px; background: var(--surface); color: var(--muted); }
+        .mode-tab { padding: 7px 12px; cursor: pointer; text-transform: capitalize; }
+        .mode-tab:hover { color: var(--text); border-color: var(--accent); }
+        .mode-tab.active { color: var(--text); border-color: var(--accent); background: var(--accent-soft); }
+        .icon-btn { width: 38px; height: 38px; cursor: pointer; color: var(--text); }
+        .page { width: min(1680px, 100%); margin: 0 auto; padding: 22px 24px 32px; }
+        .warning { display: flex; gap: 10px; padding: 11px 14px; margin-bottom: 14px; border: 1px solid color-mix(in srgb, var(--warn) 55%, var(--border)); border-radius: 10px; color: var(--warn); background: color-mix(in srgb, var(--warn) 8%, var(--surface)); font-size: 12px; }
+        .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin-bottom: 14px; }
+        .summary-card { min-height: 74px; padding: 13px 15px; border: 1px solid var(--border); border-radius: 12px; background: linear-gradient(145deg, var(--surface), var(--surface-2)); box-shadow: var(--shadow); }
+        .summary-label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; }
+        .summary-value { margin-top: 7px; font-size: 22px; font-weight: 720; font-variant-numeric: tabular-nums; }
+        .toolbar { display: flex; align-items: center; gap: 10px; padding: 11px; margin-bottom: 10px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
+        .search-wrap { position: relative; flex: 1; }
+        .search { width: 100%; height: 38px; padding: 0 38px 0 38px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface-2); color: var(--text); }
+        .search-wrap::before { content: "⌕"; position: absolute; left: 13px; top: 7px; color: var(--muted); font-size: 19px; }
+        .clear-search { position: absolute; right: 7px; top: 5px; width: 28px; height: 28px; border: 0; border-radius: 7px; background: transparent; color: var(--muted); cursor: pointer; }
+        .clear-search:hover { background: var(--surface-3); color: var(--text); }
+        .sort-select { height: 38px; padding: 0 10px; cursor: pointer; }
+        .empty-toggle { display: inline-flex; align-items: center; gap: 7px; min-height: 38px; padding: 0 10px; border: 1px solid var(--border); border-radius: 9px; color: var(--muted); font-size: 11px; white-space: nowrap; cursor: pointer; }
+        .empty-toggle:hover { color: var(--text); border-color: var(--accent); }
+        .empty-toggle input { accent-color: var(--accent); }
+        .result-count { min-width: 100px; text-align: right; color: var(--muted); font-size: 12px; }
+        .workspace { display: grid; grid-template-columns: minmax(620px, 1.5fr) minmax(360px, .8fr); gap: 12px; min-height: 620px; }
+        .panel { min-width: 0; overflow: hidden; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); box-shadow: var(--shadow); }
+        .panel-title { display: flex; justify-content: space-between; align-items: center; min-height: 45px; padding: 0 14px; border-bottom: 1px solid var(--border); color: var(--muted); font-size: 12px; }
+        .event-list { height: 68vh; min-height: 540px; overflow: auto; }
+        .event-head, .event-row { display: grid; grid-template-columns: minmax(260px, 1fr) 105px 105px 68px; align-items: center; gap: 10px; }
+        .event-head { position: sticky; top: 0; z-index: 4; min-height: 34px; padding: 0 12px; border-bottom: 1px solid var(--border); background: var(--surface-2); color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .06em; }
+        .event-row { position: relative; width: 100%; min-height: 35px; padding: 0 12px; border: 0; border-bottom: 1px solid color-mix(in srgb, var(--border) 55%, transparent); background: transparent; color: var(--text); text-align: left; cursor: pointer; }
+        .event-row:hover { background: var(--accent-soft); }
+        .event-row.selected { background: var(--accent-soft); box-shadow: inset 3px 0 var(--accent); }
+        .event-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-left: calc(var(--depth) * 14px); }
+        .event-name strong { font-weight: 600; }
+        .event-path-hint { display: block; margin-top: 2px; color: var(--muted); font-size: 9px; overflow: hidden; text-overflow: ellipsis; }
+        .metric-cell { font-variant-numeric: tabular-nums; text-align: right; }
+        .duration-cell { display: grid; grid-template-columns: minmax(34px, auto) 44px; align-items: center; gap: 7px; }
+        .duration-bar { height: 5px; border-radius: 99px; background: var(--surface-3); overflow: hidden; }
+        .duration-bar > span { display: block; height: 100%; border-radius: inherit; background: var(--accent); }
+        .delta.good { color: var(--good); }
+        .delta.bad { color: var(--bad); }
+        .empty { display: grid; place-items: center; min-height: 280px; color: var(--muted); text-align: center; padding: 40px; }
+        .detail { height: calc(68vh + 34px); min-height: 574px; overflow: auto; }
+        .detail-hero { padding: 16px; border-bottom: 1px solid var(--border); background: linear-gradient(145deg, var(--surface-2), var(--surface)); }
+        .detail-name { font-size: 17px; font-weight: 720; overflow-wrap: anywhere; }
+        .detail-path { margin-top: 7px; color: var(--muted); font-size: 11px; line-height: 1.45; overflow-wrap: anywhere; }
+        .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+        .chip { padding: 4px 7px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface); color: var(--muted); font-size: 10px; }
+        .metric-filter { width: calc(100% - 24px); height: 34px; margin: 12px; padding: 0 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); color: var(--text); }
+        .metrics { padding: 0 12px 12px; }
+        .metric { padding: 10px 4px; border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent); }
+        .metric-top { display: grid; grid-template-columns: minmax(160px, 1fr) auto; gap: 10px; align-items: start; }
+        .metric-name { color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
+        .metric-value { font-weight: 650; font-variant-numeric: tabular-nums; text-align: right; }
+        .metric-compare { display: grid; grid-template-columns: 1fr 1fr auto; gap: 8px; margin-top: 7px; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+        .metric-doc { margin-top: 8px; padding: 9px 10px; border-left: 2px solid var(--accent); border-radius: 0 7px 7px 0; background: var(--accent-soft); color: var(--muted); font-size: 10px; line-height: 1.45; }
+        .metric-doc strong { color: var(--text); }
+        .limit-note { padding: 10px 14px; border-top: 1px solid var(--border); color: var(--muted); font-size: 11px; }
+        @media (max-width: 1100px) {
+            .summary { grid-template-columns: repeat(3, 1fr); }
+            .workspace { grid-template-columns: 1fr; }
+            .event-list, .detail { height: auto; min-height: 460px; max-height: 70vh; }
+        }
+        @media (max-width: 720px) {
+            .app-header { flex-wrap: wrap; padding: 10px 14px; }
+            .brand { min-width: 0; flex: 1; }
+            .mode-tabs { order: 3; flex-basis: 100%; overflow-x: auto; }
+            .page { padding: 14px; }
+            .summary { grid-template-columns: repeat(2, 1fr); }
+            .toolbar { flex-wrap: wrap; }
+            .search-wrap { flex-basis: 100%; }
+            .event-head, .event-row { grid-template-columns: minmax(210px, 1fr) 90px 65px; }
+            .event-head > :nth-child(3), .event-row > :nth-child(3) { display: none; }
+        }
+    </style>
+</head>
+<body>
+    <header class="app-header">
+        <div class="brand">
+            <div class="brand-title">RenderDoc Performance</div>
+            <div class="brand-subtitle" id="source-path"></div>
+        </div>
+        <nav class="mode-tabs" id="mode-tabs" aria-label="Report mode"></nav>
+        <button class="icon-btn" id="theme-toggle" type="button" title="Toggle theme" aria-label="Toggle theme">◐</button>
+    </header>
+    <main class="page">
+        <div id="warnings"></div>
+        <section class="summary" id="summary" aria-label="Capture summary"></section>
+        <section class="toolbar" aria-label="Event controls">
+            <div class="search-wrap">
+                <input class="search" id="search" type="search" autocomplete="off" placeholder="Find pass, marker, draw or EID…">
+                <button class="clear-search" id="clear-search" type="button" aria-label="Clear search">×</button>
+            </div>
+            <select class="sort-select" id="sort" aria-label="Sort events">
+                <option value="timeline">Timeline order</option>
+                <option value="duration">GPU duration</option>
+                <option value="regression">Largest regression</option>
+            </select>
+            <label class="empty-toggle" title="Include events and markers that have no measured counter rows">
+                <input id="show-empty" type="checkbox">
+                <span>Unmeasured events</span>
+            </label>
+            <div class="result-count" id="result-count"></div>
+        </section>
+        <section class="workspace">
+            <div class="panel">
+                <div class="panel-title"><span id="list-title">Event graph</span><span id="list-meta"></span></div>
+                <div class="event-list" id="event-list"></div>
+                <div class="limit-note" id="limit-note"></div>
+            </div>
+            <aside class="panel detail" id="detail">
+                <div class="empty">Select a pass or marker to inspect its path, counters and NVIDIA guidance.</div>
+            </aside>
+        </section>
+    </main>
+    <script>
+        'use strict';
+        const report = __REPORT_DATA__;
+        const MAX_ROWS = 800;
+        const state = { mode: report.comparison ? 'compare' : '0', query: '', sort: report.comparison ? 'regression' : 'timeline', selected: null, selectedKey: null, showEmpty: false, metricQuery: '' };
+        const els = Object.fromEntries(['source-path','mode-tabs','theme-toggle','warnings','summary','search','clear-search','sort','show-empty','result-count','list-title','list-meta','event-list','limit-note','detail'].map(id => [id, document.getElementById(id)]));
+
+        function format(value, digits = 3) {
+            if (!Number.isFinite(value)) return 'n/a';
+            const abs = Math.abs(value);
+            if (abs >= 1e9) return `${(value / 1e9).toFixed(2)}B`;
+            if (abs >= 1e6) return `${(value / 1e6).toFixed(2)}M`;
+            if (abs >= 1e3) return `${(value / 1e3).toFixed(2)}K`;
+            if (abs > 0 && abs < .001) return value.toExponential(2);
+            return value.toLocaleString('en-US', { maximumFractionDigits: digits });
+        }
+
+        function percentDelta(before, after) {
+            if (!Number.isFinite(before) || !Number.isFinite(after) || before === 0) return null;
+            return (after - before) / Math.abs(before);
+        }
+
+        function duration(record, capture) {
+            return capture.durationHeader ? (record.metrics[capture.durationHeader] || 0) : 0;
+        }
+
+        function setTheme(theme) {
+            document.documentElement.dataset.theme = theme;
+            try { localStorage.setItem('renderdoc-perf-theme', theme); } catch (_) {}
+        }
+
+        function buildTabs() {
+            const tabs = report.captures.map((capture, index) => ({ id: String(index), label: capture.label }));
+            if (report.comparison) tabs.unshift({ id: 'compare', label: 'Compare' });
+            tabs.forEach(tab => {
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.className = 'mode-tab';
+                button.textContent = tab.label;
+                button.onclick = () => { state.mode = tab.id; state.selected = null; state.selectedKey = null; state.sort = tab.id === 'compare' ? 'regression' : 'timeline'; els.sort.value = state.sort; render(); };
+                button.dataset.mode = tab.id;
+                els['mode-tabs'].appendChild(button);
+            });
+        }
+
+        function renderWarnings() {
+            els.warnings.replaceChildren();
+            report.warnings.forEach(message => {
+                const warning = document.createElement('div');
+                warning.className = 'warning';
+                warning.textContent = `⚠ ${message}`;
+                els.warnings.appendChild(warning);
+            });
+        }
+
+        function addSummary(label, value) {
+            const card = document.createElement('div');
+            card.className = 'summary-card';
+            const caption = document.createElement('div');
+            caption.className = 'summary-label';
+            caption.textContent = label;
+            const number = document.createElement('div');
+            number.className = 'summary-value';
+            number.textContent = value;
+            card.append(caption, number);
+            els.summary.appendChild(card);
+        }
+
+        function renderSummary() {
+            els.summary.replaceChildren();
+            if (state.mode === 'compare') {
+                const first = report.captures[0].summary;
+                const second = report.captures[1].summary;
+                addSummary('Matched nodes', format(report.comparison.matchedCount, 0));
+                addSummary(report.captures[0].label + ' GPU', Number.isFinite(first.totalDurationMs) ? `${format(first.totalDurationMs)} ms` : 'n/a');
+                addSummary(report.captures[1].label + ' GPU', Number.isFinite(second.totalDurationMs) ? `${format(second.totalDurationMs)} ms` : 'n/a');
+                const delta = percentDelta(first.totalDurationMs, second.totalDurationMs);
+                addSummary('GPU delta', delta === null ? 'n/a' : `${delta >= 0 ? '+' : ''}${(delta * 100).toFixed(1)}%`);
+                addSummary('Shared metrics', format(report.captures[0].headers.filter(header => report.captures[1].headers.includes(header)).length, 0));
+                addSummary('Topology gaps', `${format(report.comparison.onlyFirstCount, 0)} / ${format(report.comparison.onlySecondCount, 0)}`);
+                return;
+            }
+            const capture = report.captures[Number(state.mode)];
+            addSummary('GPU duration', Number.isFinite(capture.summary.totalDurationMs) ? `${format(capture.summary.totalDurationMs)} ms` : 'n/a');
+            addSummary('Events', format(capture.summary.eventCount, 0));
+            addSummary('Counter rows', format(capture.summary.counterRowCount, 0));
+            addSummary('Metrics', format(capture.summary.metricCount, 0));
+            addSummary('Missing leaves', format(capture.summary.missingLeafCount, 0));
+        }
+
+        function compareRows() {
+            const first = report.captures[0];
+            const second = report.captures[1];
+            return report.comparison.matches.map(([firstIndex, secondIndex]) => {
+                const before = first.records[firstIndex];
+                const after = second.records[secondIndex];
+                const beforeDuration = duration(before, first);
+                const afterDuration = duration(after, second);
+                return { before, after, beforeDuration, afterDuration, delta: afterDuration - beforeDuration, relative: percentDelta(beforeDuration, afterDuration) };
+            });
+        }
+
+        function currentRows() {
+            const query = state.query.trim().toLowerCase();
+            let rows;
+            if (state.mode === 'compare') {
+                rows = compareRows().filter(row => {
+                    const matches = !query || row.after.path.toLowerCase().includes(query) || String(row.after.eid).includes(query) || String(row.before.eid).includes(query);
+                    const measured = row.before.counterRowCount > 0 || row.after.counterRowCount > 0;
+                    return matches && (state.showEmpty || query || measured);
+                });
+                if (state.sort === 'timeline') rows.sort((a, b) => a.after.order - b.after.order);
+                else if (state.sort === 'duration') rows.sort((a, b) => b.afterDuration - a.afterDuration);
+                else rows.sort((a, b) => b.delta - a.delta);
+            } else {
+                const capture = report.captures[Number(state.mode)];
+                rows = capture.records.filter(record => {
+                    const matches = !query || record.path.toLowerCase().includes(query) || String(record.eid).includes(query);
+                    return matches && (state.showEmpty || query || record.counterRowCount > 0);
+                });
+                if (state.sort === 'duration') rows.sort((a, b) => duration(b, capture) - duration(a, capture));
+                else rows.sort((a, b) => a.order - b.order);
+            }
+            return rows;
+        }
+
+        function cell(className, text) {
+            const value = document.createElement('span');
+            value.className = className;
+            value.textContent = text;
+            return value;
+        }
+
+        function durationCell(value, max) {
+            const wrap = document.createElement('span');
+            wrap.className = 'metric-cell duration-cell';
+            wrap.appendChild(cell('', format(value)));
+            const bar = document.createElement('span');
+            bar.className = 'duration-bar';
+            const fill = document.createElement('span');
+            fill.style.width = `${max > 0 ? Math.min(100, value / max * 100) : 0}%`;
+            bar.appendChild(fill);
+            wrap.appendChild(bar);
+            return wrap;
+        }
+
+        function renderList() {
+            const rows = currentRows();
+            const shown = rows.slice(0, MAX_ROWS);
+            els['event-list'].replaceChildren();
+            els['result-count'].textContent = `${format(rows.length, 0)} results`;
+            els['limit-note'].textContent = rows.length > MAX_ROWS ? `Showing ${MAX_ROWS} rows. Narrow the search to inspect the rest.` : '';
+            els['list-title'].textContent = state.mode === 'compare' ? 'Matched event graph' : 'Event graph';
+            els['list-meta'].textContent = state.mode === 'compare' ? `${report.captures[0].label} → ${report.captures[1].label}` : report.captures[Number(state.mode)].label;
+            const head = document.createElement('div');
+            head.className = 'event-head';
+            ['Pass / marker', state.mode === 'compare' ? 'After GPU ms' : 'GPU ms', state.mode === 'compare' ? 'Before GPU ms' : 'Counter rows', state.mode === 'compare' ? 'Delta' : 'EID'].forEach(text => head.appendChild(cell('', text)));
+            els['event-list'].appendChild(head);
+            if (!shown.length) {
+                const empty = document.createElement('div');
+                empty.className = 'empty';
+                empty.textContent = 'No matching passes or markers.';
+                els['event-list'].appendChild(empty);
+                return;
+            }
+            const maxDuration = Math.max(...shown.map(row => state.mode === 'compare' ? row.afterDuration : duration(row, report.captures[Number(state.mode)])), 0);
+            shown.forEach(row => {
+                const record = state.mode === 'compare' ? row.after : row;
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.className = 'event-row';
+                button.style.setProperty('--depth', String(Math.min(record.depth, 12)));
+                button.title = record.path;
+                const rowKey = record.stableKey;
+                if (state.selectedKey === rowKey) button.classList.add('selected');
+                const name = document.createElement('span');
+                name.className = 'event-name';
+                const strong = document.createElement('strong');
+                strong.textContent = record.name;
+                name.appendChild(strong);
+                if (state.query || state.sort !== 'timeline') {
+                    const pathHint = document.createElement('span');
+                    pathHint.className = 'event-path-hint';
+                    pathHint.textContent = record.path;
+                    name.appendChild(pathHint);
+                }
+                button.appendChild(name);
+                const value = state.mode === 'compare' ? row.afterDuration : duration(row, report.captures[Number(state.mode)]);
+                button.appendChild(durationCell(value, maxDuration));
+                if (state.mode === 'compare') {
+                    button.appendChild(cell('metric-cell', format(row.beforeDuration)));
+                    const delta = cell(`metric-cell delta ${row.delta > 0 ? 'bad' : row.delta < 0 ? 'good' : ''}`, row.relative === null ? format(row.delta) : `${row.relative >= 0 ? '+' : ''}${(row.relative * 100).toFixed(1)}%`);
+                    button.appendChild(delta);
+                } else {
+                    button.appendChild(cell('metric-cell', format(row.counterRowCount, 0)));
+                    button.appendChild(cell('metric-cell', String(row.eid)));
+                }
+                button.onclick = () => { state.selected = row; state.selectedKey = rowKey; state.metricQuery = ''; renderList(); renderDetail(row); };
+                els['event-list'].appendChild(button);
+            });
+        }
+
+        function metricValue(header, value) {
+            const formatted = format(value, 4);
+            return /\(%\)|\.pct\b/i.test(header) && Number.isFinite(value) ? `${formatted}%` : formatted;
+        }
+
+        function renderMetricDoc(container, header) {
+            const doc = report.metricDocs[header];
+            if (!doc) return;
+            const box = document.createElement('div');
+            box.className = 'metric-doc';
+            const title = document.createElement('strong');
+            title.textContent = doc.label;
+            box.append(title, document.createTextNode(` — ${doc.plain}`));
+            if (doc.doesNotProve) box.append(document.createElement('br'), document.createTextNode(`Does not prove: ${doc.doesNotProve}`));
+            container.appendChild(box);
+        }
+
+        function detailHero(record, compareRecord = null) {
+            const hero = document.createElement('div');
+            hero.className = 'detail-hero';
+            const title = document.createElement('div');
+            title.className = 'detail-name';
+            title.textContent = record.name;
+            const path = document.createElement('div');
+            path.className = 'detail-path';
+            path.textContent = record.path;
+            const chips = document.createElement('div');
+            chips.className = 'chips';
+            [`EID ${record.eid}`, record.scope, `${record.counterRowCount} counter rows`, `${record.childCount} children`].forEach(value => {
+                const chip = document.createElement('span');
+                chip.className = 'chip';
+                chip.textContent = value;
+                chips.appendChild(chip);
+            });
+            if (compareRecord) {
+                const chip = document.createElement('span');
+                chip.className = 'chip';
+                chip.textContent = `before EID ${compareRecord.eid}`;
+                chips.appendChild(chip);
+            }
+            hero.append(title, path, chips);
+            return hero;
+        }
+
+        function renderDetail(row) {
+            els.detail.replaceChildren();
+            const compare = state.mode === 'compare';
+            const record = compare ? row.after : row;
+            const before = compare ? row.before : null;
+            els.detail.appendChild(detailHero(record, before));
+            const filter = document.createElement('input');
+            filter.className = 'metric-filter';
+            filter.type = 'search';
+            filter.placeholder = 'Filter counters…';
+            filter.value = state.metricQuery;
+            els.detail.appendChild(filter);
+            const metrics = document.createElement('div');
+            metrics.className = 'metrics';
+            els.detail.appendChild(metrics);
+
+            const renderMetrics = () => {
+                state.metricQuery = filter.value.toLowerCase();
+                metrics.replaceChildren();
+                let headers = compare
+                    ? Array.from(new Set([...Object.keys(before.metrics), ...Object.keys(record.metrics)]))
+                    : Object.keys(record.metrics);
+                headers = headers.filter(header => !state.metricQuery || header.toLowerCase().includes(state.metricQuery));
+                const durationHeader = compare ? report.captures[1].durationHeader : report.captures[Number(state.mode)].durationHeader;
+                headers.sort((a, b) => a === durationHeader ? -1 : b === durationHeader ? 1 : a.localeCompare(b));
+                headers.forEach(header => {
+                    const item = document.createElement('div');
+                    item.className = 'metric';
+                    const top = document.createElement('div');
+                    top.className = 'metric-top';
+                    top.appendChild(cell('metric-name', header));
+                    const afterValue = record.metrics[header] ?? 0;
+                    top.appendChild(cell('metric-value', metricValue(header, afterValue)));
+                    item.appendChild(top);
+                    if (compare) {
+                        const values = document.createElement('div');
+                        values.className = 'metric-compare';
+                        const beforeValue = before.metrics[header] ?? 0;
+                        values.appendChild(cell('', `${report.captures[0].label}: ${metricValue(header, beforeValue)}`));
+                        values.appendChild(cell('', `${report.captures[1].label}: ${metricValue(header, afterValue)}`));
+                        const delta = percentDelta(beforeValue, afterValue);
+                        const change = delta === null ? (afterValue > 0 ? 'new' : 'n/a') : `${delta >= 0 ? '+' : ''}${(delta * 100).toFixed(1)}%`;
+                        values.appendChild(cell('delta', change));
+                        item.appendChild(values);
+                    }
+                    renderMetricDoc(item, header);
+                    metrics.appendChild(item);
+                });
+                if (!headers.length) {
+                    const empty = document.createElement('div');
+                    empty.className = 'empty';
+                    empty.textContent = 'No matching counters.';
+                    metrics.appendChild(empty);
+                }
+            };
+            filter.oninput = renderMetrics;
+            renderMetrics();
+        }
+
+        function render() {
+            Array.from(els['mode-tabs'].children).forEach(button => button.classList.toggle('active', button.dataset.mode === state.mode));
+            els.sort.querySelector('[value="regression"]').disabled = state.mode !== 'compare';
+            renderSummary();
+            renderList();
+            if (!state.selected) els.detail.innerHTML = '<div class="empty">Select a pass or marker to inspect its path, counters and NVIDIA guidance.</div>';
+        }
+
+        els['source-path'].textContent = report.sourceDirectory;
+        els.search.oninput = () => { state.query = els.search.value; state.selected = null; state.selectedKey = null; render(); };
+        els['clear-search'].onclick = () => { els.search.value = ''; state.query = ''; state.selected = null; state.selectedKey = null; render(); els.search.focus(); };
+        els.sort.onchange = () => { state.sort = els.sort.value; state.selected = null; state.selectedKey = null; render(); };
+        els['show-empty'].onchange = () => { state.showEmpty = els['show-empty'].checked; state.selected = null; state.selectedKey = null; render(); };
+        els['theme-toggle'].onclick = () => setTheme(document.documentElement.dataset.theme === 'light' ? 'dark' : 'light');
+        let storedTheme = null;
+        try { storedTheme = localStorage.getItem('renderdoc-perf-theme'); } catch (_) {}
+        setTheme(storedTheme || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'));
+        buildTabs();
+        renderWarnings();
+        els.sort.value = state.sort;
+        render();
+    </script>
+</body>
+</html>

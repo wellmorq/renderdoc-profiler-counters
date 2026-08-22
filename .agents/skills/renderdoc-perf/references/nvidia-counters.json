@@ -1,0 +1,256 @@
+{
+  "version": 1,
+  "sources": [
+    "https://docs.nvidia.com/nsight-compute/ProfilingGuide/index.html",
+    "https://docs.nvidia.com/nsight-graphics/UserGuide/shader-profiler.html",
+    "https://docs.nvidia.com/nsight-graphics/UserGuide/gpu-trace-system-architecture.html"
+  ],
+  "notes": "Curated, paraphrased guidance for counters commonly exported by RenderDoc through NVIDIA Nsight Perf SDK. Availability and exact semantics can vary by GPU architecture and SDK version.",
+  "entries": [
+    {
+      "prefix": "GPU Duration",
+      "label": "GPU duration",
+      "plain": "Elapsed GPU timestamp duration for the event.",
+      "doesNotProve": "Duration alone does not identify the limiting resource.",
+      "checks": ["Compare workload counts and normalized cost before interpreting hardware stalls."]
+    },
+    {
+      "prefix": "Input Vertices Read",
+      "label": "Input vertices",
+      "plain": "Number of vertices consumed by the input assembler.",
+      "doesNotProve": "It does not reveal vertex stride, attribute count, or cache behavior.",
+      "checks": ["Normalize vertex-stage work and memory traffic per input vertex."]
+    },
+    {
+      "prefix": "Rasterized Primitives",
+      "label": "Rasterized primitives",
+      "plain": "Primitives that reached rasterization after earlier pipeline stages.",
+      "doesNotProve": "It does not directly measure covered pixels or overdraw.",
+      "checks": ["Compare Samples Passed and PS Invocations to separate geometry growth from pixel coverage."]
+    },
+    {
+      "prefix": "Samples Passed",
+      "label": "Samples passed",
+      "plain": "Samples that passed the configured depth and stencil tests.",
+      "doesNotProve": "It is not always equal to pixel shader work, especially with early/late tests, MSAA, or helper lanes.",
+      "checks": ["Compare PS Invocations and resolution/MSAA settings."]
+    },
+    {
+      "prefix": "VS Invocations",
+      "label": "Vertex shader invocations",
+      "plain": "Number of vertex shader executions reported by pipeline statistics.",
+      "doesNotProve": "It does not describe the instruction or memory cost of each invocation.",
+      "checks": ["Compare instructions and bytes per invocation."]
+    },
+    {
+      "prefix": "PS Invocations",
+      "label": "Pixel shader invocations",
+      "plain": "Number of pixel shader executions reported by pipeline statistics.",
+      "doesNotProve": "It does not by itself distinguish screen coverage, overdraw, MSAA, or helper-lane effects.",
+      "checks": ["Compare Samples Passed, rasterized primitives, and instructions per invocation."]
+    },
+    {
+      "prefix": "CS Invocations",
+      "label": "Compute shader invocations",
+      "plain": "Number of compute shader thread invocations.",
+      "doesNotProve": "It does not describe workgroup shape, divergence, or cost per thread.",
+      "checks": ["Normalize instructions and bytes by invocation count."]
+    },
+    {
+      "prefix": "dram__bytes_op_read",
+      "label": "DRAM read traffic",
+      "plain": "Bytes read from device memory during the measured range.",
+      "doesNotProve": "High traffic is not automatically a bandwidth bottleneck; duration, peak bandwidth, cache behavior, and concurrency matter.",
+      "checks": ["Compare bytes per invocation and effective bytes per second."]
+    },
+    {
+      "prefix": "dram__bytes_op_write",
+      "label": "DRAM write traffic",
+      "plain": "Bytes written to device memory during the measured range.",
+      "doesNotProve": "High writes alone do not identify the producer or show that DRAM bandwidth is saturated.",
+      "checks": ["Compare output/sample counts and write bytes per item."]
+    },
+    {
+      "prefix": "gpu__time_active",
+      "label": "GPU active time",
+      "plain": "Time during which the measured GPU unit or range was active.",
+      "doesNotProve": "Active time is not interchangeable with end-to-end event duration on every architecture.",
+      "checks": ["Use GPU Duration as the primary elapsed-time reference when available."]
+    },
+    {
+      "prefix": "gpu__time_duration",
+      "label": "PerfWorks duration",
+      "plain": "PerfWorks duration measurement for the sampled range.",
+      "doesNotProve": "Its unit and relation to RenderDoc GPU Duration should be verified from the exported counter description.",
+      "checks": ["Do not silently mix it with millisecond timestamp duration."]
+    },
+    {
+      "prefix": "sm__inst_executed",
+      "label": "SM instructions executed",
+      "plain": "Hardware instructions executed by streaming multiprocessors.",
+      "doesNotProve": "It is not a source-code instruction count and can mix shader stages.",
+      "checks": ["Compare relative change and stage-specific instruction metrics when available."]
+    },
+    {
+      "prefix": "smsp__inst_executed_shader_",
+      "label": "Stage instructions executed",
+      "plain": "Hardware instructions attributed to a specific shader stage.",
+      "doesNotProve": "It does not identify which source operation or shader variant added the instructions.",
+      "checks": ["Normalize by the matching stage invocation count and inspect the shader variant."]
+    },
+    {
+      "prefix": "l1tex__t_sector_hit_rate",
+      "label": "L1/TEX sector hit rate",
+      "plain": "Share of L1TEX sector lookups served as hits.",
+      "doesNotProve": "A low hit rate is not necessarily costly when traffic is small or latency is hidden.",
+      "checks": ["Interpret together with traffic volume and long-scoreboard or throttle stalls."]
+    },
+    {
+      "prefix": "l1tex__average_t_sector_lookup_hit",
+      "label": "Average L1/TEX lookup hit ratio",
+      "plain": "Average share of L1TEX sector lookups that hit.",
+      "doesNotProve": "It does not show the absolute number of requests.",
+      "checks": ["Pair with traffic volume and elapsed time."]
+    },
+    {
+      "prefix": "lts__t_sector_hit_rate",
+      "label": "L2 sector hit rate",
+      "plain": "Share of L2 sector lookups served as hits.",
+      "doesNotProve": "Hit rate alone does not measure latency or bandwidth saturation.",
+      "checks": ["Compare DRAM traffic and bytes per unit of work."]
+    },
+    {
+      "prefix": "lts__average_t_sector_hit_rate_realtime",
+      "label": "Average real-time L2 hit rate",
+      "plain": "Average L2 sector hit rate for the measured range.",
+      "doesNotProve": "It is an average and can hide short expensive regions.",
+      "checks": ["Inspect the smallest relevant marker or draw range."]
+    },
+    {
+      "prefix": "smsp__warp_issue_stalled_barrier",
+      "label": "Barrier wait",
+      "plain": "Warps wait for sibling warps to reach a synchronization barrier.",
+      "doesNotProve": "A barrier exists by design; the counter does not show which code path arrived late.",
+      "checks": ["Look for divergent work before the barrier and compare workgroup size."]
+    },
+    {
+      "prefix": "smsp__warp_issue_stalled_branch_resolving",
+      "label": "Branch resolution wait",
+      "plain": "Warps wait for branch targets and program-counter updates.",
+      "doesNotProve": "It does not directly quantify lane divergence.",
+      "checks": ["Inspect branch density and compare a controlled constant-branch variant."]
+    },
+    {
+      "prefix": "smsp__warp_issue_stalled_dispatch_stall",
+      "label": "Dispatch interlock",
+      "plain": "A ready instruction is held back by dispatcher conflicts or interlocks.",
+      "doesNotProve": "It does not identify a user-controlled source operation.",
+      "checks": ["Check whether it is a persistent top contributor across matched captures."]
+    },
+    {
+      "prefix": "smsp__warp_issue_stalled_drain",
+      "label": "Warp drain wait",
+      "plain": "Exited warps wait for outstanding memory writes or exports to finish before resources are released.",
+      "doesNotProve": "It does not show which store or export dominates.",
+      "checks": ["Inspect write traffic near the end of the shader."]
+    },
+    {
+      "prefix": "smsp__warp_issue_stalled_lg_throttle",
+      "label": "Local/global memory queue pressure",
+      "plain": "The instruction queue for local and global memory operations is full.",
+      "doesNotProve": "It does not distinguish useful global traffic from local-memory spills.",
+      "checks": ["Check bytes per invocation, register pressure, and possible local-memory spills."]
+    },
+    {
+      "prefix": "smsp__warp_issue_stalled_long_scoreboard",
+      "label": "Long-latency data dependency",
+      "plain": "Warps wait for data from an L1TEX-backed local, global, surface, or texture operation.",
+      "doesNotProve": "It does not identify the resource or prove bandwidth saturation.",
+      "checks": ["Compare cache hit rates, traffic per invocation, and the shader resource accesses."]
+    },
+    {
+      "prefix": "smsp__warp_issue_stalled_math_pipe_throttle",
+      "label": "Math pipeline pressure",
+      "plain": "Ready warps wait because a particular math execution pipeline is oversubscribed.",
+      "doesNotProve": "It does not identify the source expression or guarantee that ALU is the frame-level bottleneck.",
+      "checks": ["Compare instruction mix and a simplified shader variant."]
+    },
+    {
+      "prefix": "smsp__warp_issue_stalled_membar",
+      "label": "Memory barrier wait",
+      "plain": "Warps wait for a memory barrier and outstanding memory operations.",
+      "doesNotProve": "It does not show whether the barrier is unnecessary.",
+      "checks": ["Inspect memory ordering and the work preceding the barrier."]
+    },
+    {
+      "prefix": "smsp__warp_issue_stalled_mio_throttle",
+      "label": "MIO pipeline queue pressure",
+      "plain": "The queue for shared-memory, special-math, and related MIO instructions is full.",
+      "doesNotProve": "It does not distinguish shared-memory traffic, dynamic branches, and special-function instructions.",
+      "checks": ["Use shared-memory counters and instruction mix to separate the causes."]
+    },
+    {
+      "prefix": "smsp__warp_issue_stalled_misc",
+      "label": "Miscellaneous hardware wait",
+      "plain": "A warp is stalled for a hardware reason not represented by the other categories.",
+      "doesNotProve": "This category is not actionable by itself.",
+      "checks": ["Look for stronger counters before forming a conclusion."]
+    },
+    {
+      "prefix": "smsp__warp_issue_stalled_no_instruction",
+      "label": "Instruction availability wait",
+      "plain": "A warp waits for instruction fetch or selection to fetch an instruction.",
+      "doesNotProve": "It can be normal for short workloads and does not automatically mean instruction-cache pressure.",
+      "checks": ["Compare workload length, branch structure, and shader code size."]
+    },
+    {
+      "prefix": "smsp__warp_issue_stalled_not_selected",
+      "label": "Eligible warp not selected",
+      "plain": "The warp was ready, but another eligible warp was scheduled in that cycle.",
+      "doesNotProve": "A high value often means there are enough warps to hide latency and is not inherently a problem.",
+      "checks": ["Do not optimize this counter in isolation."]
+    },
+    {
+      "prefix": "smsp__warp_issue_stalled_selected",
+      "label": "Warp issued",
+      "plain": "The warp was selected and issued an instruction.",
+      "doesNotProve": "It is a scheduler state, not a stall cause to eliminate.",
+      "checks": ["Use it as context for the distribution of scheduler states."]
+    },
+    {
+      "prefix": "smsp__warp_issue_stalled_short_scoreboard",
+      "label": "Short-latency dependency",
+      "plain": "Warps wait for MIO/shared-memory or special-function dependencies rather than L1TEX data.",
+      "doesNotProve": "It does not identify shared-memory bank conflicts or special math by itself.",
+      "checks": ["Inspect shared-memory and special-function instruction evidence."]
+    },
+    {
+      "prefix": "smsp__warp_issue_stalled_sleeping",
+      "label": "Sleeping or blocked warp",
+      "plain": "All threads in the warp are blocked, yielded, or sleeping.",
+      "doesNotProve": "It is uncommon in ordinary graphics shaders and may be irrelevant when the sample count is tiny.",
+      "checks": ["Check whether the metric is material to total pass time."]
+    },
+    {
+      "prefix": "smsp__warp_issue_stalled_tex_throttle",
+      "label": "Texture queue pressure",
+      "plain": "The L1TEX instruction queue for texture operations is full.",
+      "doesNotProve": "It does not identify a particular texture or prove DRAM bandwidth saturation.",
+      "checks": ["Compare texture work, cache behavior, and a reduced-fetch shader variant."]
+    },
+    {
+      "prefix": "smsp__warp_issue_stalled_wait",
+      "label": "Fixed-latency dependency",
+      "plain": "Warps wait on a fixed-latency execution dependency.",
+      "doesNotProve": "It does not identify the source instruction.",
+      "checks": ["Inspect instruction dependencies and whether more independent work can hide latency."]
+    },
+    {
+      "prefix": "tpc__average_registers_per_thread_shader_",
+      "label": "Registers per thread",
+      "plain": "Average register allocation pressure for the indicated shader class.",
+      "doesNotProve": "Register count alone does not prove low achieved occupancy or spilling.",
+      "checks": ["Pair with occupancy evidence and local-memory traffic."]
+    }
+  ]
+}
