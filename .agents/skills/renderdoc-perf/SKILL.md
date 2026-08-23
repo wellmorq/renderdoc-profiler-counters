@@ -17,10 +17,18 @@ Require Node.js 18+ and local file read/write access. If either capability is un
 Run:
 
 ```text
-node <skill-directory>/scripts/prepare.mjs [directory]
+node <skill-directory>/scripts/prepare.mjs [directory] [--output <analysis-directory>]
 ```
 
-The command prints JSON containing `caseDir`, `report`, `manifest`, and `guide`. Read the generated `model-guide.md` and `manifest.json`. The generated case is content-addressed, so unchanged inputs are reused.
+The command prints JSON containing `caseDir`, `report`, `manifest`, and `guide`. `report.html` is the human-facing interactive timeline. The agent should read `model-guide.md`, `manifest.json`, and focused NDJSON records instead of treating the HTML as model input. The generated case is content-addressed, so unchanged inputs are reused.
+
+If discovery is ambiguous or preparation rejects the file counts, run the read-only inventory first:
+
+```text
+node <skill-directory>/scripts/prepare.mjs [directory] --list
+```
+
+Use its coverage and shared-counter conflicts to choose the intended export. Matching EIDs do not prove that two CSVs came from the same replay; never merge or auto-select conflicting alternatives. If needed, copy only the intended one or two TXT+CSV pairs into a temporary input directory without deleting the sources.
 
 If the user did not ask a question, report what was discovered, validation warnings, and the clickable path to `report.html`. Stop after saying the case is ready for follow-up questions.
 
@@ -29,10 +37,14 @@ If the user did not ask a question, report what was discovered, validation warni
 For a named pass or marker, obtain a focused comparison first:
 
 ```text
-node <skill-directory>/scripts/query.mjs <caseDir> <pass-or-marker-name>
+node <skill-directory>/scripts/query.mjs <caseDir> <pass-or-marker-name|.|*> [--depth N] [--top N] [--metrics core|work|instructions|memory|stalls|EXACT,...] [--json]
 ```
 
-Search the generated `capture-*.ndjson` files when the focused output is not enough. Each line is one searchable graph node with its marker path, EID, scope, counters, and aggregation provenance. Metric objects are sparse: a missing key listed in that capture's manifest headers means numeric zero; a counter absent from the headers was not exported. Raw source filenames remain in `manifest.json`.
+`.` and `*` select capture roots. `--depth N` expands N child edges without changing the non-overlapping aggregate; `--top N` limits each displayed sibling set, including matched roots. Tree durations are inclusive, so compare siblings and do not add rows from different levels. Metric groups avoid long NVIDIA names; literal selectors must match an exported header exactly, case-insensitively.
+
+For a broad question, start with `.` plus a shallow bounded hierarchy, then query the dominant pass by name. Add one or two metric groups at a time; prefer an exact stall counter over a very wide combined table.
+
+Search the generated `capture-*.ndjson` files when the focused output is not enough. Each line is one searchable graph node with its marker path, EID, scope, counters, and aggregation provenance. Metric objects are sparse: if `counterRowCount` is positive, a missing key listed in that capture's manifest headers means numeric zero; if it is zero, the event was not measured. A counter absent from the headers was not exported. GPU durations are normalized to milliseconds through `durationToMs`; raw counter values retain the CSV unit. Raw source filenames remain in `manifest.json`.
 
 If the focused table omits a signal, search the NDJSON and manifest headers for another exported variant before concluding that the work did not change. Prefer region totals such as `.sum` for per-invocation normalization; compare `.avg` variants directly and do not treat them as totals.
 

@@ -18,6 +18,8 @@
             --accent-soft: rgba(120, 169, 255, .14);
             --good: #61d6a3;
             --bad: #ff7d90;
+            --higher: #f0a44b;
+            --lower: #55a7e8;
             --warn: #f4c76b;
             --shadow: 0 20px 55px rgba(0, 0, 0, .28);
         }
@@ -34,6 +36,8 @@
             --accent-soft: rgba(49, 95, 186, .1);
             --good: #167a55;
             --bad: #b72845;
+            --higher: #a85d08;
+            --lower: #176da8;
             --warn: #8d6414;
             --shadow: 0 18px 45px rgba(41, 55, 85, .12);
         }
@@ -103,6 +107,37 @@
         .metric-doc { margin-top: 8px; padding: 9px 10px; border-left: 2px solid var(--accent); border-radius: 0 7px 7px 0; background: var(--accent-soft); color: var(--muted); font-size: 10px; line-height: 1.45; }
         .metric-doc strong { color: var(--text); }
         .limit-note { padding: 10px 14px; border-top: 1px solid var(--border); color: var(--muted); font-size: 11px; }
+        .timeline-panel { margin-bottom: 12px; }
+        .timeline-controls { display: flex; align-items: center; gap: 8px; }
+        .timeline-field { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+        .timeline-field select { max-width: 360px; height: 30px; padding: 0 8px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface-2); color: var(--text); }
+        .zoom-btn { width: 28px; height: 28px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface-2); color: var(--text); cursor: pointer; }
+        .zoom-range { width: 90px; accent-color: var(--accent); }
+        .zoom-value { width: 38px; text-align: right; font-variant-numeric: tabular-nums; }
+        .timeline-scroll { height: 48vh; min-height: 350px; max-height: 700px; overflow: auto; background: var(--surface-2); }
+        .timeline-grid { position: relative; min-width: 980px; min-height: 100%; overflow: hidden; background-image: linear-gradient(to right, color-mix(in srgb, var(--border) 45%, transparent) 1px, transparent 1px); background-size: 10% 100%; }
+        .depth-line { position: absolute; left: 0; right: 0; height: 1px; background: color-mix(in srgb, var(--border) 62%, transparent); pointer-events: none; }
+        .timeline-block { position: absolute; display: flex; align-items: center; gap: 4px; min-width: 2px; height: 25px; padding: 0 7px; overflow: hidden; border: 1px solid rgba(255,255,255,.18); border-radius: 5px; color: #fff; box-shadow: 0 2px 7px rgba(0,0,0,.2); text-align: left; cursor: pointer; transition: filter .12s ease, opacity .12s ease, box-shadow .12s ease; }
+        .timeline-block:hover { z-index: 5; filter: brightness(1.16); }
+        .timeline-block.selected { z-index: 6; box-shadow: 0 0 0 2px var(--accent), 0 5px 16px rgba(0,0,0,.35); }
+        .timeline-block.dim { opacity: .13; filter: saturate(.3); }
+        .timeline-block.match { z-index: 7; box-shadow: 0 0 0 2px var(--warn); }
+        .timeline-block.unmeasured { background-image: repeating-linear-gradient(135deg, transparent 0 5px, rgba(255,255,255,.16) 5px 8px); }
+        .timeline-block.zero { width: 3px !important; padding: 0; border-style: dashed; border-color: var(--muted); background: transparent !important; box-shadow: none; }
+        .timeline-block .caret { flex: 0 0 auto; font-size: 9px; opacity: .85; }
+        .timeline-block .timeline-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; font-weight: 620; text-shadow: 0 1px 2px rgba(0,0,0,.45); }
+        .timeline-footer { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; min-height: 38px; padding: 8px 13px; border-top: 1px solid var(--border); color: var(--muted); font-size: 10px; }
+        .timeline-note { flex: 1; min-width: 360px; }
+        .timeline-legend { display: flex; gap: 10px; }
+        .legend-item { display: inline-flex; align-items: center; gap: 5px; }
+        .legend-dot { width: 9px; height: 9px; border-radius: 3px; background: #64748b; }
+        .legend-dot.higher { background: var(--higher); }
+        .legend-dot.lower { background: var(--lower); }
+        .legend-dot.new { background: #9b72e8; }
+        .legend-dot.unmeasured { background: repeating-linear-gradient(135deg, #64748b 0 4px, #94a3b8 4px 6px); }
+        .aggregate-note { margin: 12px; padding: 9px 10px; border-left: 2px solid var(--accent); border-radius: 0 7px 7px 0; background: var(--accent-soft); color: var(--muted); font-size: 10px; line-height: 1.45; }
+        .metric-anomaly { margin-top: 8px; padding: 8px 9px; border-left: 2px solid var(--warn); border-radius: 0 7px 7px 0; background: color-mix(in srgb, var(--warn) 9%, var(--surface)); color: var(--warn); font-size: 10px; line-height: 1.45; }
+        .metric-range { margin-top: 8px; color: var(--muted); font-size: 10px; line-height: 1.45; }
         @media (max-width: 1100px) {
             .summary { grid-template-columns: repeat(3, 1fr); }
             .workspace { grid-template-columns: 1fr; }
@@ -116,6 +151,8 @@
             .summary { grid-template-columns: repeat(2, 1fr); }
             .toolbar { flex-wrap: wrap; }
             .search-wrap { flex-basis: 100%; }
+            .timeline-controls { flex-wrap: wrap; justify-content: flex-end; }
+            .timeline-field select { max-width: 210px; }
             .event-head, .event-row { grid-template-columns: minmax(210px, 1fr) 90px 65px; }
             .event-head > :nth-child(3), .event-row > :nth-child(3) { display: none; }
         }
@@ -143,11 +180,33 @@
                 <option value="duration">GPU duration</option>
                 <option value="regression">Largest regression</option>
             </select>
-            <label class="empty-toggle" title="Include events and markers that have no measured counter rows">
+            <label class="empty-toggle" title="Include events whose selected timeline metric is zero or has no measured counter row">
                 <input id="show-empty" type="checkbox">
-                <span>Unmeasured events</span>
+                <span>Zero / unmeasured</span>
             </label>
             <div class="result-count" id="result-count"></div>
+        </section>
+        <section class="panel timeline-panel">
+            <div class="panel-title">
+                <span><strong id="timeline-title">Relative event timeline</strong> <span id="timeline-status"></span></span>
+                <div class="timeline-controls">
+                    <label class="timeline-field">Width <select id="width-metric" aria-label="Timeline width metric"></select></label>
+                    <button class="zoom-btn" id="zoom-out" type="button" aria-label="Zoom out">−</button>
+                    <input class="zoom-range" id="zoom" type="range" min="1" max="6" step="0.25" value="1" aria-label="Timeline zoom">
+                    <button class="zoom-btn" id="zoom-in" type="button" aria-label="Zoom in">+</button>
+                    <span class="zoom-value" id="zoom-value">100%</span>
+                </div>
+            </div>
+            <div class="timeline-scroll" id="timeline-scroll"><div class="timeline-grid" id="timeline-grid"></div></div>
+            <div class="timeline-footer">
+                <span class="timeline-note" id="timeline-note"></span>
+                <span class="timeline-legend" id="timeline-legend" hidden>
+                    <span class="legend-item"><span class="legend-dot higher"></span>higher</span>
+                    <span class="legend-item"><span class="legend-dot lower"></span>lower</span>
+                    <span class="legend-item"><span class="legend-dot new"></span>no measured baseline</span>
+                    <span class="legend-item"><span class="legend-dot unmeasured"></span>unmeasured after</span>
+                </span>
+            </div>
         </section>
         <section class="workspace">
             <div class="panel">
@@ -164,8 +223,10 @@
         'use strict';
         const report = __REPORT_DATA__;
         const MAX_ROWS = 800;
-        const state = { mode: report.comparison ? 'compare' : '0', query: '', sort: report.comparison ? 'regression' : 'timeline', selected: null, selectedKey: null, showEmpty: false, metricQuery: '' };
-        const els = Object.fromEntries(['source-path','mode-tabs','theme-toggle','warnings','summary','search','clear-search','sort','show-empty','result-count','list-title','list-meta','event-list','limit-note','detail'].map(id => [id, document.getElementById(id)]));
+        const ROW_HEIGHT = 34;
+        const NORMALIZED_DURATION = '__gpu_duration_ms__';
+        const state = { mode: report.comparison ? 'compare' : '0', query: '', sort: report.comparison ? 'regression' : 'timeline', selected: null, selectedKey: null, showEmpty: false, metricQuery: '', widthMetric: null, zoom: 1, collapsed: new Set() };
+        const els = Object.fromEntries(['source-path','mode-tabs','theme-toggle','warnings','summary','search','clear-search','sort','show-empty','result-count','list-title','list-meta','event-list','limit-note','detail','width-metric','zoom-out','zoom-in','zoom','zoom-value','timeline-title','timeline-status','timeline-scroll','timeline-grid','timeline-note','timeline-legend'].map(id => [id, document.getElementById(id)]));
 
         function format(value, digits = 3) {
             if (!Number.isFinite(value)) return 'n/a';
@@ -178,12 +239,60 @@
         }
 
         function percentDelta(before, after) {
-            if (!Number.isFinite(before) || !Number.isFinite(after) || before === 0) return null;
+            if (!Number.isFinite(before) || !Number.isFinite(after)) return null;
+            if (before === 0) return after === 0 ? 0 : null;
             return (after - before) / Math.abs(before);
         }
 
         function duration(record, capture) {
-            return capture.durationHeader ? (record.metrics[capture.durationHeader] || 0) : 0;
+            if (!record || record.counterRowCount === 0 || !capture.durationHeader) return null;
+            const raw = record.metrics[capture.durationHeader] ?? 0;
+            return Number.isFinite(raw) ? raw * (capture.durationToMs ?? 1) : null;
+        }
+
+        function activeCapture() {
+            return report.captures[state.mode === 'compare' ? 1 : Number(state.mode)];
+        }
+
+        function hasMetric(capture, header) {
+            if (header === NORMALIZED_DURATION) return Boolean(capture.durationHeader);
+            return capture.headers.includes(header);
+        }
+
+        function metric(record, capture, header) {
+            if (header === NORMALIZED_DURATION) return duration(record, capture);
+            if (!record || record.counterRowCount === 0 || !hasMetric(capture, header)) return null;
+            return record.metrics[header] ?? 0;
+        }
+
+        function counterKind(capture, header) {
+            if (header === NORMALIZED_DURATION) return 'sum';
+            return capture.counterKinds?.[header] || 'sum';
+        }
+
+        function metricLabel(header) {
+            return header === NORMALIZED_DURATION ? 'GPU Duration (normalized ms)' : header;
+        }
+
+        function captureMetricTotal(capture, header) {
+            if (counterKind(capture, header) !== 'sum') return null;
+            return capture.records
+                .filter(record => !record.parentKey && record.counterRowCount > 0)
+                .reduce((sum, record) => sum + (metric(record, capture, header) || 0), 0);
+        }
+
+        function recordShares(record, capture, header) {
+            const value = metric(record, capture, header);
+            if (!Number.isFinite(value)) return null;
+            const additive = counterKind(capture, header) === 'sum';
+            const parent = record.parentKey ? capture.records.find(candidate => candidate.stableKey === record.parentKey) : null;
+            const parentValue = parent ? metric(parent, capture, header) : null;
+            const total = captureMetricTotal(capture, header);
+            return {
+                value,
+                parent: additive && Number.isFinite(parentValue) && parentValue > 0 ? value / parentValue : null,
+                capture: additive && total > 0 ? value / total : null
+            };
         }
 
         function setTheme(theme) {
@@ -199,7 +308,7 @@
                 button.type = 'button';
                 button.className = 'mode-tab';
                 button.textContent = tab.label;
-                button.onclick = () => { state.mode = tab.id; state.selected = null; state.selectedKey = null; state.sort = tab.id === 'compare' ? 'regression' : 'timeline'; els.sort.value = state.sort; render(); };
+                button.onclick = () => { state.mode = tab.id; state.selected = null; state.selectedKey = null; state.sort = tab.id === 'compare' ? 'regression' : 'timeline'; state.widthMetric = null; els.sort.value = state.sort; buildWidthMetrics(); render(); };
                 button.dataset.mode = tab.id;
                 els['mode-tabs'].appendChild(button);
             });
@@ -258,7 +367,213 @@
                 const after = second.records[secondIndex];
                 const beforeDuration = duration(before, first);
                 const afterDuration = duration(after, second);
-                return { before, after, beforeDuration, afterDuration, delta: afterDuration - beforeDuration, relative: percentDelta(beforeDuration, afterDuration) };
+                const delta = Number.isFinite(beforeDuration) && Number.isFinite(afterDuration) ? afterDuration - beforeDuration : null;
+                return { before, after, beforeDuration, afterDuration, delta, relative: percentDelta(beforeDuration, afterDuration) };
+            });
+        }
+
+        function buildWidthMetrics() {
+            const capture = activeCapture();
+            const before = report.captures[0];
+            let headers = capture.headers.filter(header => header !== capture.durationHeader && counterKind(capture, header) === 'sum');
+            if (state.mode === 'compare') headers = headers.filter(header => hasMetric(before, header) && counterKind(before, header) === 'sum');
+            const canUseDuration = capture.durationHeader && (state.mode !== 'compare' || before.durationHeader);
+            if (canUseDuration) headers.unshift(NORMALIZED_DURATION);
+            if (!headers.length) headers = capture.headers.slice();
+            headers.sort((a, b) => a === NORMALIZED_DURATION ? -1 : b === NORMALIZED_DURATION ? 1 : a.localeCompare(b));
+            els['width-metric'].replaceChildren();
+            headers.forEach(header => {
+                const option = document.createElement('option');
+                option.value = header;
+                option.textContent = metricLabel(header);
+                els['width-metric'].appendChild(option);
+            });
+            const preferred = headers.includes(NORMALIZED_DURATION) ? NORMALIZED_DURATION : headers[0];
+            state.widthMetric = state.widthMetric && headers.includes(state.widthMetric) ? state.widthMetric : preferred;
+            els['width-metric'].value = state.widthMetric || '';
+        }
+
+        function nameColor(name) {
+            let hash = 0;
+            for (let i = 0; i < name.length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash);
+            return `hsl(${Math.abs(hash) % 360} 48% 43%)`;
+        }
+
+        function timelineLayout(capture) {
+            const children = new Map();
+            const beforeByKey = state.mode === 'compare'
+                ? new Map(report.captures[0].records.map(record => [record.stableKey, record]))
+                : new Map();
+            capture.records.forEach(record => {
+                const key = record.parentKey || '';
+                if (!children.has(key)) children.set(key, []);
+                children.get(key).push(record);
+            });
+            children.forEach(group => group.sort((a, b) => a.order - b.order));
+            const query = state.query.trim().toLowerCase();
+            const items = [];
+            let maxDepth = 0;
+
+            function visit(record, offset) {
+                const descendants = children.get(record.stableKey) || [];
+                const raw = metric(record, capture, state.widthMetric);
+                const before = beforeByKey.get(record.stableKey) || null;
+                const beforeRaw = before ? metric(before, report.captures[0], state.widthMetric) : null;
+                const value = Number.isFinite(raw) ? Math.max(0, raw) : null;
+                const beforeValue = Number.isFinite(beforeRaw) ? Math.max(0, beforeRaw) : null;
+                const layoutValue = state.mode === 'compare'
+                    ? Math.max(value ?? 0, beforeValue ?? 0)
+                    : (value ?? 0);
+                const matches = !query || record.path.toLowerCase().includes(query) || String(record.eid).includes(query);
+                const showZero = state.showEmpty || (query && matches);
+                if (layoutValue <= 0 && descendants.length === 0 && !showZero) return { end: offset, visible: false };
+
+                const item = { record, start: offset, width: layoutValue, value, beforeValue, zero: layoutValue <= 0, matches };
+                items.push(item);
+                maxDepth = Math.max(maxDepth, record.depth);
+                if (state.collapsed.has(record.stableKey)) return { end: offset + layoutValue, visible: true };
+
+                let cursor = offset;
+                let childVisible = false;
+                descendants.forEach(child => {
+                    const result = visit(child, cursor);
+                    cursor = result.end;
+                    childVisible ||= result.visible;
+                });
+                item.width = Math.max(layoutValue, cursor - offset);
+                if (item.width <= 0 && !childVisible && !showZero) {
+                    items.pop();
+                    return { end: offset, visible: false };
+                }
+                return { end: offset + item.width, visible: true };
+            }
+
+            let total = 0;
+            (children.get('') || []).forEach(root => { total = visit(root, total).end; });
+            return { items, total: total || 1, maxDepth, query };
+        }
+
+        function selectTimelineRecord(record, beforeByKey, block) {
+            state.selectedKey = record.stableKey;
+            if (state.mode === 'compare') {
+                const before = beforeByKey.get(record.stableKey) || null;
+                const beforeDuration = before ? duration(before, report.captures[0]) : null;
+                const afterDuration = duration(record, report.captures[1]);
+                const delta = Number.isFinite(beforeDuration) && Number.isFinite(afterDuration) ? afterDuration - beforeDuration : null;
+                state.selected = { before, after: record, beforeDuration, afterDuration, delta, relative: percentDelta(beforeDuration, afterDuration) };
+            } else {
+                state.selected = record;
+            }
+            state.metricQuery = '';
+            els['timeline-grid'].querySelector('.timeline-block.selected')?.classList.remove('selected');
+            block.classList.add('selected');
+            renderList();
+            renderDetail(state.selected);
+        }
+
+        function renderTimeline() {
+            const capture = activeCapture();
+            const layout = timelineLayout(capture);
+            const beforeByKey = state.mode === 'compare' ? new Map(report.captures[0].records.map(record => [record.stableKey, record])) : new Map();
+            const recordByKey = new Map(capture.records.map(record => [record.stableKey, record]));
+            const captureTotal = captureMetricTotal(capture, state.widthMetric);
+            els['timeline-grid'].replaceChildren();
+            els['timeline-grid'].style.width = `${state.zoom * 100}%`;
+            els['timeline-grid'].style.height = `${Math.max(350, (layout.maxDepth + 1) * ROW_HEIGHT + 18)}px`;
+            els['timeline-title'].textContent = state.mode === 'compare' ? `Comparison timeline · ${capture.label} layout` : `${capture.label} timeline`;
+            const matchCount = layout.query ? layout.items.filter(item => item.matches).length : layout.items.length;
+            els['timeline-status'].textContent = ` · ${format(matchCount, 0)} ${layout.query ? 'matches' : 'visible nodes'}`;
+            const additive = counterKind(capture, state.widthMetric) === 'sum';
+            const widthLabel = metricLabel(state.widthMetric || 'the selected counter');
+            const widthBasis = state.mode === 'compare'
+                ? `width uses the larger measured ${widthLabel} value from either capture so removed work remains visible`
+                : `width is proportional to ${widthLabel}`;
+            const shareNote = additive ? '' : ' Parent/capture shares are hidden because this counter is not additive.';
+            const coverageNote = additive && capture.summary.missingLeafCount ? ' Capture shares use measured roots only because some leaf counter rows are missing.' : '';
+            els['timeline-note'].textContent = `Event order comes from RenderDoc; ${widthBasis}. This is a relative workload timeline, not GPU start/end timestamps.${shareNote}${coverageNote} Double-click a marker, or use Left/Right Arrow, to collapse or expand its children.`;
+            els['timeline-legend'].hidden = state.mode !== 'compare';
+
+            if (!layout.items.length) {
+                const empty = document.createElement('div');
+                empty.className = 'empty';
+                empty.textContent = 'No events have a value for this counter. Enable Zero / unmeasured to inspect the full hierarchy.';
+                els['timeline-grid'].appendChild(empty);
+                return;
+            }
+
+            for (let depth = 0; depth <= layout.maxDepth; depth++) {
+                const line = document.createElement('div');
+                line.className = 'depth-line';
+                line.style.top = `${(depth + 1) * ROW_HEIGHT}px`;
+                els['timeline-grid'].appendChild(line);
+            }
+
+            layout.items.forEach(item => {
+                const block = document.createElement('button');
+                block.type = 'button';
+                block.className = 'timeline-block';
+                if (item.zero) block.classList.add('zero');
+                if (state.selectedKey === item.record.stableKey) block.classList.add('selected');
+                if (layout.query && !item.matches) block.classList.add('dim');
+                if (layout.query && item.matches) block.classList.add('match');
+                block.style.top = `${item.record.depth * ROW_HEIGHT + 5}px`;
+                block.style.left = `${item.start / layout.total * 100}%`;
+                if (!item.zero) block.style.width = `${Math.max(item.width / layout.total * 100, .015)}%`;
+
+                const before = beforeByKey.get(item.record.stableKey) || null;
+                const beforeValue = item.beforeValue;
+                if (state.mode === 'compare') {
+                    const scale = Math.max(Math.abs(beforeValue || 0), Math.abs(item.value || 0), 1e-9);
+                    const change = Number.isFinite(beforeValue) && Number.isFinite(item.value) ? (item.value - beforeValue) / scale : null;
+                    if (!Number.isFinite(item.value)) block.classList.add('unmeasured');
+                    block.style.backgroundColor = !Number.isFinite(item.value)
+                        ? '#64748b'
+                        : !Number.isFinite(beforeValue)
+                            ? '#9b72e8'
+                            : change > .02 ? 'var(--higher)' : change < -.02 ? 'var(--lower)' : '#64748b';
+                } else {
+                    block.style.backgroundColor = nameColor(item.record.name);
+                }
+
+                const relative = percentDelta(beforeValue, item.value);
+                const comparison = state.mode === 'compare' ? `\n${report.captures[0].label}: ${format(beforeValue, 4)} → ${capture.label}: ${format(item.value, 4)}${relative === null ? '' : ` (${relative >= 0 ? '+' : ''}${(relative * 100).toFixed(1)}%)`}` : '';
+                const parent = item.record.parentKey ? recordByKey.get(item.record.parentKey) : null;
+                const parentValue = parent ? metric(parent, capture, state.widthMetric) : null;
+                const parentShare = additive && Number.isFinite(item.value) && Number.isFinite(parentValue) && parentValue > 0 ? item.value / parentValue : null;
+                const captureShare = additive && Number.isFinite(item.value) && captureTotal > 0 ? item.value / captureTotal : null;
+                const shares = `${parentShare === null ? '' : `\nParent share: ${(parentShare * 100).toFixed(1)}%`}${captureShare === null ? '' : `\nCapture share: ${(captureShare * 100).toFixed(1)}%`}`;
+                block.title = `${item.record.path}\n${widthLabel}: ${format(item.value, 4)}${shares}${comparison}`;
+                if (item.record.childCount) {
+                    block.setAttribute('aria-expanded', String(!state.collapsed.has(item.record.stableKey)));
+                    const caret = document.createElement('span');
+                    caret.className = 'caret';
+                    caret.textContent = state.collapsed.has(item.record.stableKey) ? '▶' : '▼';
+                    block.appendChild(caret);
+                }
+                const label = document.createElement('span');
+                label.className = 'timeline-label';
+                label.textContent = item.record.name;
+                block.appendChild(label);
+                block.dataset.key = item.record.stableKey;
+                block.setAttribute('aria-label', `${item.record.name}. ${format(item.value, 4)} ${widthLabel}.${item.record.childCount ? ' Use Left Arrow to collapse and Right Arrow to expand.' : ''}`);
+                block.onclick = () => selectTimelineRecord(item.record, beforeByKey, block);
+                const setCollapsed = collapsed => {
+                    if (!item.record.childCount) return;
+                    collapsed ? state.collapsed.add(item.record.stableKey) : state.collapsed.delete(item.record.stableKey);
+                    renderTimeline();
+                    Array.from(els['timeline-grid'].querySelectorAll('.timeline-block')).find(candidate => candidate.dataset.key === item.record.stableKey)?.focus();
+                };
+                block.onkeydown = event => {
+                    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+                    event.preventDefault();
+                    setCollapsed(event.key === 'ArrowLeft');
+                };
+                block.ondblclick = event => {
+                    event.preventDefault();
+                    if (!item.record.childCount) return;
+                    setCollapsed(!state.collapsed.has(item.record.stableKey));
+                };
+                els['timeline-grid'].appendChild(block);
             });
         }
 
@@ -268,17 +583,20 @@
             if (state.mode === 'compare') {
                 rows = compareRows().filter(row => {
                     const matches = !query || row.after.path.toLowerCase().includes(query) || String(row.after.eid).includes(query) || String(row.before.eid).includes(query);
-                    const measured = row.before.counterRowCount > 0 || row.after.counterRowCount > 0;
-                    return matches && (state.showEmpty || query || measured);
+                    const beforeValue = metric(row.before, report.captures[0], state.widthMetric);
+                    const afterValue = metric(row.after, report.captures[1], state.widthMetric);
+                    const visibleForMetric = (Number.isFinite(beforeValue) && beforeValue > 0) || (Number.isFinite(afterValue) && afterValue > 0);
+                    return matches && (state.showEmpty || query || visibleForMetric);
                 });
                 if (state.sort === 'timeline') rows.sort((a, b) => a.after.order - b.after.order);
-                else if (state.sort === 'duration') rows.sort((a, b) => b.afterDuration - a.afterDuration);
-                else rows.sort((a, b) => b.delta - a.delta);
+                else if (state.sort === 'duration') rows.sort((a, b) => (b.afterDuration ?? -Infinity) - (a.afterDuration ?? -Infinity));
+                else rows.sort((a, b) => (b.delta ?? -Infinity) - (a.delta ?? -Infinity));
             } else {
                 const capture = report.captures[Number(state.mode)];
                 rows = capture.records.filter(record => {
                     const matches = !query || record.path.toLowerCase().includes(query) || String(record.eid).includes(query);
-                    return matches && (state.showEmpty || query || record.counterRowCount > 0);
+                    const value = metric(record, capture, state.widthMetric);
+                    return matches && (state.showEmpty || query || (Number.isFinite(value) && value > 0));
                 });
                 if (state.sort === 'duration') rows.sort((a, b) => duration(b, capture) - duration(a, capture));
                 else rows.sort((a, b) => a.order - b.order);
@@ -357,7 +675,7 @@
                     button.appendChild(cell('metric-cell', format(row.counterRowCount, 0)));
                     button.appendChild(cell('metric-cell', String(row.eid)));
                 }
-                button.onclick = () => { state.selected = row; state.selectedKey = rowKey; state.metricQuery = ''; renderList(); renderDetail(row); };
+                button.onclick = () => { state.selected = row; state.selectedKey = rowKey; state.metricQuery = ''; renderTimeline(); renderList(); renderDetail(row); };
                 els['event-list'].appendChild(button);
             });
         }
@@ -379,7 +697,46 @@
             container.appendChild(box);
         }
 
-        function detailHero(record, compareRecord = null) {
+        function renderMetricAnomaly(container, capture, header) {
+            const anomaly = capture.anomalies?.find(entry => entry.header === header);
+            if (!anomaly) return;
+            const box = document.createElement('div');
+            box.className = 'metric-anomaly';
+            box.textContent = `Raw export warning: ${anomaly.count} values fall outside the expected percentage range (${format(anomaly.min, 4)}..${format(anomaly.max, 4)}). Values are shown unchanged.`;
+            container.appendChild(box);
+        }
+
+        function descendantRange(record, capture, header) {
+            if (record.scope === 'self') return null;
+            const prefix = `${record.stableKey}/`;
+            let count = 0;
+            let min = Infinity;
+            let max = -Infinity;
+            capture.records.forEach(candidate => {
+                if (candidate.scope !== 'self' || candidate.counterRowCount === 0 || !candidate.stableKey.startsWith(prefix)) return;
+                const value = metric(candidate, capture, header);
+                if (!Number.isFinite(value)) return;
+                count++;
+                min = Math.min(min, value);
+                max = Math.max(max, value);
+            });
+            return count ? { count, min, max } : null;
+        }
+
+        function renderMetricRange(container, record, capture, header) {
+            if (record.scope === 'self' || counterKind(capture, header) !== 'mean') return;
+            const range = descendantRange(record, capture, header);
+            if (!range) return;
+            const box = document.createElement('div');
+            box.className = 'metric-range';
+            const denominator = /\.pct\b|\(%\)/i.test(header)
+                ? 'An exact marker-wide percentage requires its numerator and denominator counters.'
+                : 'An exact marker-wide average requires the counter-specific workload denominator.';
+            box.textContent = `Duration-weighted estimate for this marker. Raw descendant range: ${metricValue(header, range.min)}..${metricValue(header, range.max)} across ${range.count} actions. ${denominator}`;
+            container.appendChild(box);
+        }
+
+        function detailHero(record, compareRecord = null, capture = activeCapture()) {
             const hero = document.createElement('div');
             hero.className = 'detail-hero';
             const title = document.createElement('div');
@@ -396,6 +753,26 @@
                 chip.textContent = value;
                 chips.appendChild(chip);
             });
+            const shares = state.widthMetric ? recordShares(record, capture, state.widthMetric) : null;
+            if (shares) {
+                const value = document.createElement('span');
+                value.className = 'chip';
+                value.title = metricLabel(state.widthMetric);
+                value.textContent = `width: ${format(shares.value, 4)}`;
+                chips.appendChild(value);
+                if (shares.parent !== null) {
+                    const parent = document.createElement('span');
+                    parent.className = 'chip';
+                    parent.textContent = `${(shares.parent * 100).toFixed(1)}% of parent`;
+                    chips.appendChild(parent);
+                }
+                if (shares.capture !== null) {
+                    const total = document.createElement('span');
+                    total.className = 'chip';
+                    total.textContent = `${(shares.capture * 100).toFixed(1)}% of capture`;
+                    chips.appendChild(total);
+                }
+            }
             if (compareRecord) {
                 const chip = document.createElement('span');
                 chip.className = 'chip';
@@ -411,7 +788,33 @@
             const compare = state.mode === 'compare';
             const record = compare ? row.after : row;
             const before = compare ? row.before : null;
-            els.detail.appendChild(detailHero(record, before));
+            const capture = activeCapture();
+            const beforeCapture = report.captures[0];
+            els.detail.appendChild(detailHero(record, before, capture));
+            if (record.counterRowCount === 0) {
+                const note = document.createElement('div');
+                note.className = 'aggregate-note';
+                note.textContent = `${capture.label}: this event has no counter row. Counter values are unavailable, not measured zeros.`;
+                els.detail.appendChild(note);
+            }
+            if (compare && before?.counterRowCount === 0) {
+                const note = document.createElement('div');
+                note.className = 'aggregate-note';
+                note.textContent = `${beforeCapture.label}: this event has no counter row. Counter values are unavailable, not measured zeros.`;
+                els.detail.appendChild(note);
+            }
+            if (compare && !before) {
+                const note = document.createElement('div');
+                note.className = 'aggregate-note';
+                note.textContent = `No stable-path match exists in ${beforeCapture.label}; this event is not used as a one-to-one baseline comparison.`;
+                els.detail.appendChild(note);
+            }
+            if (record.scope !== 'self' && record.counterRowCount > 0) {
+                const note = document.createElement('div');
+                note.className = 'aggregate-note';
+                note.textContent = `Derived from ${record.counterRowCount} descendant rows: .sum counters are added, .min/.max preserve extrema, and average/percentage counters use ${capture.weightHeader ? `a ${capture.weightHeader}-weighted mean` : 'an arithmetic mean'}. Leaf events show raw CSV values.`;
+                els.detail.appendChild(note);
+            }
             const filter = document.createElement('input');
             filter.className = 'metric-filter';
             filter.type = 'search';
@@ -426,31 +829,37 @@
                 state.metricQuery = filter.value.toLowerCase();
                 metrics.replaceChildren();
                 let headers = compare
-                    ? Array.from(new Set([...Object.keys(before.metrics), ...Object.keys(record.metrics)]))
-                    : Object.keys(record.metrics);
-                headers = headers.filter(header => !state.metricQuery || header.toLowerCase().includes(state.metricQuery));
-                const durationHeader = compare ? report.captures[1].durationHeader : report.captures[Number(state.mode)].durationHeader;
+                    ? Array.from(new Set([...beforeCapture.headers, ...capture.headers]))
+                    : capture.headers.slice();
+                if (compare && beforeCapture.durationHeader && capture.durationHeader) {
+                    headers = [NORMALIZED_DURATION, ...headers.filter(header => header !== beforeCapture.durationHeader && header !== capture.durationHeader)];
+                }
+                headers = headers.filter(header => !state.metricQuery || metricLabel(header).toLowerCase().includes(state.metricQuery));
+                const durationHeader = compare ? NORMALIZED_DURATION : capture.durationHeader;
                 headers.sort((a, b) => a === durationHeader ? -1 : b === durationHeader ? 1 : a.localeCompare(b));
                 headers.forEach(header => {
                     const item = document.createElement('div');
                     item.className = 'metric';
                     const top = document.createElement('div');
                     top.className = 'metric-top';
-                    top.appendChild(cell('metric-name', header));
-                    const afterValue = record.metrics[header] ?? 0;
-                    top.appendChild(cell('metric-value', metricValue(header, afterValue)));
+                    top.appendChild(cell('metric-name', metricLabel(header)));
+                    const afterValue = metric(record, capture, header);
+                    const estimated = record.counterRowCount > 0 && record.scope !== 'self' && counterKind(capture, header) === 'mean';
+                    top.appendChild(cell('metric-value', `${estimated ? '≈ ' : ''}${metricValue(header, afterValue)}`));
                     item.appendChild(top);
                     if (compare) {
                         const values = document.createElement('div');
                         values.className = 'metric-compare';
-                        const beforeValue = before.metrics[header] ?? 0;
-                        values.appendChild(cell('', `${report.captures[0].label}: ${metricValue(header, beforeValue)}`));
-                        values.appendChild(cell('', `${report.captures[1].label}: ${metricValue(header, afterValue)}`));
+                        const beforeValue = metric(before, beforeCapture, header);
+                        values.appendChild(cell('', `${beforeCapture.label}: ${metricValue(header, beforeValue)}`));
+                        values.appendChild(cell('', `${capture.label}: ${metricValue(header, afterValue)}`));
                         const delta = percentDelta(beforeValue, afterValue);
-                        const change = delta === null ? (afterValue > 0 ? 'new' : 'n/a') : `${delta >= 0 ? '+' : ''}${(delta * 100).toFixed(1)}%`;
+                        const change = delta === null ? (beforeValue === 0 && Number.isFinite(afterValue) && afterValue !== 0 ? 'from zero' : 'n/a') : `${delta >= 0 ? '+' : ''}${(delta * 100).toFixed(1)}%`;
                         values.appendChild(cell('delta', change));
                         item.appendChild(values);
                     }
+                    renderMetricRange(item, record, capture, header);
+                    renderMetricAnomaly(item, capture, header);
                     renderMetricDoc(item, header);
                     metrics.appendChild(item);
                 });
@@ -469,8 +878,16 @@
             Array.from(els['mode-tabs'].children).forEach(button => button.classList.toggle('active', button.dataset.mode === state.mode));
             els.sort.querySelector('[value="regression"]').disabled = state.mode !== 'compare';
             renderSummary();
+            renderTimeline();
             renderList();
             if (!state.selected) els.detail.innerHTML = '<div class="empty">Select a pass or marker to inspect its path, counters and NVIDIA guidance.</div>';
+        }
+
+        function setZoom(value) {
+            state.zoom = Math.min(6, Math.max(1, Number(value) || 1));
+            els.zoom.value = String(state.zoom);
+            els['zoom-value'].textContent = `${Math.round(state.zoom * 100)}%`;
+            renderTimeline();
         }
 
         els['source-path'].textContent = report.sourceDirectory;
@@ -478,12 +895,27 @@
         els['clear-search'].onclick = () => { els.search.value = ''; state.query = ''; state.selected = null; state.selectedKey = null; render(); els.search.focus(); };
         els.sort.onchange = () => { state.sort = els.sort.value; state.selected = null; state.selectedKey = null; render(); };
         els['show-empty'].onchange = () => { state.showEmpty = els['show-empty'].checked; state.selected = null; state.selectedKey = null; render(); };
+        els['width-metric'].onchange = () => {
+            state.widthMetric = els['width-metric'].value;
+            renderTimeline();
+            renderList();
+            if (state.selected) renderDetail(state.selected);
+        };
+        els.zoom.oninput = () => setZoom(els.zoom.value);
+        els['zoom-out'].onclick = () => setZoom(state.zoom - .25);
+        els['zoom-in'].onclick = () => setZoom(state.zoom + .25);
+        els['timeline-scroll'].onwheel = event => {
+            if (!event.ctrlKey && !event.metaKey) return;
+            event.preventDefault();
+            setZoom(state.zoom + (event.deltaY < 0 ? .25 : -.25));
+        };
         els['theme-toggle'].onclick = () => setTheme(document.documentElement.dataset.theme === 'light' ? 'dark' : 'light');
         let storedTheme = null;
         try { storedTheme = localStorage.getItem('renderdoc-perf-theme'); } catch (_) {}
         setTheme(storedTheme || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'));
         buildTabs();
         renderWarnings();
+        buildWidthMetrics();
         els.sort.value = state.sort;
         render();
     </script>

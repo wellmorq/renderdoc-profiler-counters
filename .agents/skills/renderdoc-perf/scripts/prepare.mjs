@@ -3,8 +3,8 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const TOOL_VERSION = '1.0.0';
-const SCHEMA_VERSION = 1;
+const TOOL_VERSION = '1.1.0';
+const SCHEMA_VERSION = 2;
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const SKILL_DIR = path.resolve(SCRIPT_DIR, '..');
 const TEMPLATE_PATH = path.join(SKILL_DIR, 'assets', 'report-template.html');
@@ -13,11 +13,14 @@ const CATALOG_PATH = path.join(SKILL_DIR, 'references', 'nvidia-counters.json');
 function parseArgs(argv) {
     let target = null;
     let output = null;
+    let list = false;
     for (let i = 0; i < argv.length; i++) {
         const arg = argv[i];
         if (arg === '--output') {
             output = argv[++i];
             if (!output) throw new Error('--output requires a directory');
+        } else if (arg === '--list') {
+            list = true;
         } else if (arg.startsWith('-')) {
             throw new Error(`Unknown option: ${arg}`);
         } else if (target === null) {
@@ -26,9 +29,11 @@ function parseArgs(argv) {
             throw new Error(`Unexpected argument: ${arg}`);
         }
     }
+    if (list && output) throw new Error('--list cannot be combined with --output');
     return {
         targetDir: path.resolve(target || process.cwd()),
-        outputDir: output ? path.resolve(output) : null
+        outputDir: output ? path.resolve(output) : null,
+        list
     };
 }
 
@@ -81,7 +86,18 @@ function findDurationHeader(headers) {
         const found = headers.find(header => header === candidate);
         if (found) return found;
     }
-    return headers.find(header => /gpu duration.*ms|duration \(ms\)/i.test(header)) || null;
+    return headers.find(header => durationScaleToMs(header) !== null) || null;
+}
+
+function durationScaleToMs(header) {
+    const match = String(header || '').trim().match(/^(?:GPU )?Duration(?:\s*\((s|ms|us|µs|μs|ns)\))?$/i);
+    if (!match) return null;
+    const unit = (match[1] || 'ms').toLowerCase().replace(/[µμ]/g, 'u');
+    if (unit === 's') return 1000;
+    if (unit === 'ms') return 1;
+    if (unit === 'us') return 0.001;
+    if (unit === 'ns') return 0.000001;
+    return null;
 }
 
 function findTimeWeightHeader(headers) {
@@ -117,7 +133,8 @@ function parseCounters(text, fileName) {
             if (index === eidIndex) return;
             const header = allHeaders[index];
             const normalized = value.trim().replace(/,/g, '');
-            const number = normalized === '' ? 0 : Number(normalized);
+            if (normalized === '') throw new Error(`${fileName}: row ${i + 1}, ${header}: empty counter value`);
+            const number = Number(normalized);
             if (!Number.isFinite(number)) throw new Error(`${fileName}: row ${i + 1}, ${header}: expected a number`);
             metrics[header] = number;
         });
@@ -125,11 +142,13 @@ function parseCounters(text, fileName) {
     }
 
     if (counters.size === 0) throw new Error(`${fileName}: CSV has no valid counter rows`);
+    const durationHeader = findDurationHeader(headers);
     return {
         headers,
         counters,
         counterKinds: Object.fromEntries(headers.map(header => [header, detectCounterKind(header)])),
-        durationHeader: findDurationHeader(headers),
+        durationHeader,
+        durationToMs: durationHeader ? durationScaleToMs(durationHeader) : null,
         weightHeader: findTimeWeightHeader(headers)
     };
 }
@@ -139,20 +158,28 @@ function parseEvents(text, fileName) {
     const roots = [];
     const nodes = [];
     const stack = [];
+    const seenEids = new Set();
     const separator = lines.findIndex(line => line.trim().startsWith('---'));
     const start = separator >= 0 ? separator + 1 : 0;
 
     for (let i = start; i < lines.length; i++) {
-        const parts = lines[i].split('|');
-        if (parts.length < 2) continue;
-        const eidText = parts[0].trim();
+        const firstSeparator = lines[i].indexOf('|');
+        if (firstSeparator < 0) continue;
+        const lastSeparator = lines[i].lastIndexOf('|');
+        const eidText = lines[i].slice(0, firstSeparator).trim();
         if (!/^\d+$/.test(eidText)) continue;
-        const match = parts[1].match(/^(\s*)(?:\\)?[-=>]+\s*(.+?)\s*$/);
+        const eventEnd = lastSeparator > firstSeparator ? lastSeparator : lines[i].length;
+        const eventText = lines[i].slice(firstSeparator + 1, eventEnd);
+        const actionText = lastSeparator > firstSeparator ? lines[i].slice(lastSeparator + 1).trim() : '';
+        const match = eventText.match(/^(\s*)(?:\\)?[-=>]+\s*(.+?)\s*$/);
         if (!match) continue;
+        const eid = Number(eidText);
+        if (seenEids.has(eid)) throw new Error(`${fileName}: duplicate event EID ${eid}`);
+        seenEids.add(eid);
         const node = {
-            eid: Number(eidText),
+            eid,
             name: match[2],
-            actionNumber: parts[2]?.trim() || null,
+            actionNumber: actionText || null,
             level: Math.floor(match[1].length / 2),
             children: [],
             parent: null,
@@ -177,6 +204,32 @@ function parseEvents(text, fileName) {
     };
 }
 
+function findCounterAnomalies(counterData) {
+    const anomalies = [];
+    for (const header of counterData.headers) {
+        if (!/(\.pct\b|\(%\)|hit[_ ]rate|per_warp_active)/i.test(header)) continue;
+        let count = 0;
+        let min = Infinity;
+        let max = -Infinity;
+        counterData.counters.forEach(metrics => {
+            const value = metrics[header];
+            if (!Number.isFinite(value) || (value >= -1 && value <= 101)) return;
+            count++;
+            min = Math.min(min, value);
+            max = Math.max(max, value);
+        });
+        if (!count) continue;
+        anomalies.push({
+            type: 'percentage-range',
+            header,
+            count,
+            min,
+            max
+        });
+    }
+    return anomalies;
+}
+
 function normalizeName(name) {
     return String(name || '').trim().toLowerCase().replace(/\s+/g, ' ');
 }
@@ -193,7 +246,7 @@ function assignPaths(roots) {
             const name = normalizeName(node.name);
             const occurrence = (seen.get(name) || 0) + 1;
             seen.set(name, occurrence);
-            const part = `${name}#${occurrence}`;
+            const part = `${encodeURIComponent(name)}#${occurrence}`;
             const displayPart = totals.get(name) > 1 ? `${node.name} [${occurrence}]` : node.name;
             node.stableKey = parentKey ? `${parentKey}/${part}` : part;
             node.parentKey = parentKey || null;
@@ -232,23 +285,44 @@ function pairScore(events, counters) {
     return coverage * 1000 + commonTokens * 25 + stage * 200;
 }
 
-function choosePairs(eventsFiles, counterFiles, warnings) {
+function pairCoverage(events, counters) {
+    const eventEids = new Set(events.parsed.nodes.map(node => node.eid));
+    const leafEids = new Set(events.parsed.nodes.filter(node => node.children.length === 0).map(node => node.eid));
+    let matchedEidCount = 0;
+    let matchedLeafEidCount = 0;
+    counters.parsed.counters.forEach((_, eid) => {
+        if (eventEids.has(eid)) matchedEidCount++;
+        if (leafEids.has(eid)) matchedLeafEidCount++;
+    });
+    return { matchedEidCount, matchedLeafEidCount };
+}
+
+function validatePairs(pairs) {
+    const disconnected = pairs.find(([events, counters]) => pairCoverage(events, counters).matchedLeafEidCount === 0);
+    if (disconnected) {
+        throw new Error(`${disconnected[0].name} and ${disconnected[1].name} share no measured leaf EIDs and cannot describe the same capture`);
+    }
+    return pairs;
+}
+
+function choosePairs(eventsFiles, counterFiles) {
     if (eventsFiles.length !== counterFiles.length) {
         throw new Error(`Expected the same number of events TXT and counters CSV files; found ${eventsFiles.length} TXT and ${counterFiles.length} CSV`);
     }
     if (eventsFiles.length < 1 || eventsFiles.length > 2) {
         throw new Error(`Expected one or two TXT+CSV pairs; found ${eventsFiles.length} candidate pairs`);
     }
-    if (eventsFiles.length === 1) return [[eventsFiles[0], counterFiles[0]]];
+    if (eventsFiles.length === 1) return validatePairs([[eventsFiles[0], counterFiles[0]]]);
 
     const direct = pairScore(eventsFiles[0], counterFiles[0]) + pairScore(eventsFiles[1], counterFiles[1]);
     const crossed = pairScore(eventsFiles[0], counterFiles[1]) + pairScore(eventsFiles[1], counterFiles[0]);
     if (Math.abs(direct - crossed) < 20) {
-        warnings.push('TXT/CSV pairing was ambiguous; files were paired by sorted filename order. Use matching before/after tokens for deterministic pairing.');
+        throw new Error('TXT/CSV pairing is ambiguous. Rename files with matching before/after or other shared tokens, or place each intended pair in an unambiguous input set');
     }
-    return direct >= crossed
+    const pairs = direct >= crossed
         ? [[eventsFiles[0], counterFiles[0]], [eventsFiles[1], counterFiles[1]]]
         : [[eventsFiles[0], counterFiles[1]], [eventsFiles[1], counterFiles[0]]];
+    return validatePairs(pairs);
 }
 
 function labelPair(eventsFile, countersFile, index, pairCount) {
@@ -297,6 +371,7 @@ function aggregateRows(rows, headers, kinds, weightHeader) {
 function prepareCapture(label, eventsSource, countersSource) {
     const { roots, nodes, captureTitle } = eventsSource.parsed;
     const counterData = countersSource.parsed;
+    const anomalies = findCounterAnomalies(counterData);
     assignPaths(roots);
 
     const allEventEids = new Set(nodes.map(node => node.eid));
@@ -339,9 +414,12 @@ function prepareCapture(label, eventsSource, countersSource) {
     records.sort((a, b) => a.order - b.order);
 
     const durationHeader = counterData.durationHeader;
+    const durationToMs = counterData.durationToMs;
     const rootKeys = new Set(roots.map(node => node.stableKey));
-    const totalDurationMs = durationHeader
-        ? records.filter(record => rootKeys.has(record.stableKey)).reduce((sum, record) => sum + (record.metrics[durationHeader] || 0), 0)
+    const rootRecords = records.filter(record => rootKeys.has(record.stableKey));
+    const measuredRootRecords = rootRecords.filter(record => record.counterRowCount > 0);
+    const totalDurationMs = durationHeader && measuredRootRecords.length
+        ? measuredRootRecords.reduce((sum, record) => sum + (record.metrics[durationHeader] || 0), 0) * durationToMs
         : null;
 
     return {
@@ -352,11 +430,15 @@ function prepareCapture(label, eventsSource, countersSource) {
         headers: counterData.headers,
         counterKinds: counterData.counterKinds,
         durationHeader,
+        durationToMs,
         weightHeader: counterData.weightHeader,
+        anomalies,
         records,
         summary: {
             eventCount: nodes.length,
             rootCount: roots.length,
+            measuredRootCount: measuredRootRecords.length,
+            unmeasuredRootCount: rootRecords.length - measuredRootRecords.length,
             leafCount: leafEids.length,
             counterRowCount: counterData.counters.size,
             matchedCounterRows: counterData.counters.size - unmatchedCounterEids.length,
@@ -408,7 +490,8 @@ function renderGuide(targetDir, caseDir, captures, warnings) {
         `Case directory: ${caseDir}`,
         '',
         'The generated NDJSON files are the searchable event graph. Each line contains one event or marker, its full path, aggregation scope, counters, and provenance.',
-        'Metric objects use sparse-zero encoding: a missing metric key listed in the capture headers means numeric zero; a counter absent from the headers was not exported.',
+        'Metric objects use sparse-zero encoding only for measured records: when counterRowCount is positive, a missing metric key listed in the capture headers means numeric zero. When counterRowCount is zero, the record was not measured and all of its metric values are unavailable. A counter absent from the headers was not exported.',
+        'For parent markers, .avg/.pct values are duration-weighted estimates across descendant counter rows, not exact recomputed marker-wide ratios. Exact ratios require their numerator and denominator counters; inspect leaf rows and ranges when that distinction matters.',
         ''
     ];
     captures.forEach(capture => {
@@ -416,7 +499,7 @@ function renderGuide(targetDir, caseDir, captures, warnings) {
         lines.push(`- Events: ${capture.summary.eventCount}`);
         lines.push(`- Counter rows: ${capture.summary.counterRowCount}`);
         lines.push(`- Metrics: ${capture.summary.metricCount}`);
-        if (Number.isFinite(capture.summary.totalDurationMs)) lines.push(`- Aggregated GPU duration: ${capture.summary.totalDurationMs.toFixed(3)} ms`);
+        if (Number.isFinite(capture.summary.totalDurationMs)) lines.push(`- Measured-root GPU duration: ${capture.summary.totalDurationMs.toFixed(3)} ms`);
         lines.push(`- Sources: ${capture.eventsFile}, ${capture.countersFile}`, '');
     });
     if (warnings.length) {
@@ -425,7 +508,7 @@ function renderGuide(targetDir, caseDir, captures, warnings) {
         lines.push('');
     }
     lines.push('## Investigation', '');
-    lines.push('Use the skill query command with a pass or marker name before answering a focused question. Compare more work, more work per item, and less efficient execution. Explain hardware counter names in plain workload terms and state missing evidence explicitly.', '');
+    lines.push('Use the skill query command with a pass or marker name before answering a focused question. Use `.` or `*` for capture roots, `--depth N --top N` for bounded hierarchy, and `--metrics core|work|instructions|memory|stalls` for focused counters. Expanded descendants are inclusive display rows and never change the non-overlapping aggregate. Compare more work, more work per item, and less efficient execution. Explain hardware counter names in plain workload terms and state missing evidence explicitly.', '');
     return lines.join('\n');
 }
 
@@ -435,46 +518,273 @@ async function readCandidates(targetDir) {
     const csv = entries.filter(entry => entry.isFile() && entry.name.toLowerCase().endsWith('.csv')).sort((a, b) => a.name.localeCompare(b.name));
     const eventsFiles = [];
     const counterFiles = [];
+    const rejected = [];
+    const rejectedCandidates = [];
+    const reject = (entry, error) => {
+        const message = String(error.message || error);
+        const reason = message.startsWith(`${entry.name}:`) ? message : `${entry.name}: ${message}`;
+        rejected.push(reason);
+        rejectedCandidates.push({
+            name: entry.name,
+            type: entry.name.toLowerCase().endsWith('.txt') ? 'events' : 'counters',
+            sizeBytes: entry.sizeBytes,
+            reason
+        });
+    };
 
     for (const entry of txt) {
-        const content = await fs.readFile(path.join(targetDir, entry.name), 'utf8');
+        const filePath = path.join(targetDir, entry.name);
+        const [content, stat] = await Promise.all([
+            fs.readFile(filePath, 'utf8'),
+            fs.stat(filePath)
+        ]);
+        entry.sizeBytes = stat.size;
         try {
-            eventsFiles.push({ name: entry.name, content, parsed: parseEvents(content, entry.name) });
-        } catch {
-            // Unrelated TXT files are ignored.
+            eventsFiles.push({ name: entry.name, sizeBytes: stat.size, content, parsed: parseEvents(content, entry.name) });
+        } catch (error) {
+            reject(entry, error);
         }
     }
     for (const entry of csv) {
-        const content = await fs.readFile(path.join(targetDir, entry.name), 'utf8');
+        const filePath = path.join(targetDir, entry.name);
+        const [content, stat] = await Promise.all([
+            fs.readFile(filePath, 'utf8'),
+            fs.stat(filePath)
+        ]);
+        entry.sizeBytes = stat.size;
         try {
-            counterFiles.push({ name: entry.name, content, parsed: parseCounters(content, entry.name) });
-        } catch {
-            // Unrelated CSV files are ignored.
+            counterFiles.push({ name: entry.name, sizeBytes: stat.size, content, parsed: parseCounters(content, entry.name) });
+        } catch (error) {
+            reject(entry, error);
         }
     }
-    return { eventsFiles, counterFiles };
+    return { eventsFiles, counterFiles, rejected, rejectedCandidates };
+}
+
+function percent(value, total) {
+    return total > 0 ? (value / total) * 100 : null;
+}
+
+function describeEventCandidate(source) {
+    const nodes = source.parsed.nodes;
+    return {
+        name: source.name,
+        sizeBytes: source.sizeBytes,
+        stageHint: stageHint(source.name),
+        eventCount: nodes.length,
+        rootCount: source.parsed.roots.length,
+        leafCount: nodes.filter(node => node.children.length === 0).length
+    };
+}
+
+function describeCounterCandidate(source) {
+    const data = source.parsed;
+    return {
+        name: source.name,
+        sizeBytes: source.sizeBytes,
+        stageHint: stageHint(source.name),
+        rowCount: data.counters.size,
+        metricCount: data.headers.length,
+        headers: data.headers,
+        durationHeader: data.durationHeader,
+        durationToMs: data.durationToMs
+    };
+}
+
+function buildCoverageMatrix(eventsFiles, counterFiles) {
+    return eventsFiles.map(eventsFile => {
+        const eventEids = new Set(eventsFile.parsed.nodes.map(node => node.eid));
+        const leafEids = new Set(eventsFile.parsed.nodes.filter(node => node.children.length === 0).map(node => node.eid));
+        return {
+            eventsFile: eventsFile.name,
+            entries: counterFiles.map(counterFile => {
+                let matchedEidCount = 0;
+                let matchedLeafEidCount = 0;
+                counterFile.parsed.counters.forEach((_, eid) => {
+                    if (eventEids.has(eid)) matchedEidCount++;
+                    if (leafEids.has(eid)) matchedLeafEidCount++;
+                });
+                return {
+                    countersFile: counterFile.name,
+                    matchedEidCount,
+                    matchedLeafEidCount,
+                    eventCount: eventEids.size,
+                    leafCount: leafEids.size,
+                    counterRowCount: counterFile.parsed.counters.size,
+                    eventCoverage: percent(matchedEidCount, eventEids.size),
+                    leafCoverage: percent(matchedLeafEidCount, leafEids.size),
+                    counterCoverage: percent(matchedEidCount, counterFile.parsed.counters.size)
+                };
+            })
+        };
+    });
+}
+
+function compareCounterFiles(left, right) {
+    const leftEids = left.parsed.counters;
+    const rightEids = right.parsed.counters;
+    const commonEids = [];
+    leftEids.forEach((_, eid) => {
+        if (rightEids.has(eid)) commonEids.push(eid);
+    });
+    commonEids.sort((a, b) => a - b);
+    const rightHeaders = new Set(right.parsed.headers);
+    const commonHeaders = left.parsed.headers.filter(header => rightHeaders.has(header));
+    const comparable = commonEids.length > 0 && commonHeaders.length > 0;
+    const maxAbsDeltaByHeader = {};
+    const conflicts = [];
+    for (const header of commonHeaders) {
+        let maxAbsDelta = 0;
+        let differingRowCount = 0;
+        for (const eid of commonEids) {
+            const leftValue = leftEids.get(eid)[header];
+            const rightValue = rightEids.get(eid)[header];
+            const delta = Math.abs(leftValue - rightValue);
+            if (delta > maxAbsDelta) maxAbsDelta = delta;
+            if (delta !== 0) differingRowCount++;
+        }
+        maxAbsDeltaByHeader[header] = maxAbsDelta;
+        if (differingRowCount > 0) {
+            conflicts.push({
+                header,
+                differingRowCount,
+                maxAbsDelta
+            });
+        }
+    }
+    return {
+        leftFile: left.name,
+        rightFile: right.name,
+        leftRowCount: leftEids.size,
+        rightRowCount: rightEids.size,
+        rowCountDelta: Math.abs(leftEids.size - rightEids.size),
+        rowCountEqual: leftEids.size === rightEids.size,
+        commonEidCount: commonEids.length,
+        leftOnlyEidCount: leftEids.size - commonEids.length,
+        rightOnlyEidCount: rightEids.size - commonEids.length,
+        commonHeaderCount: commonHeaders.length,
+        comparable,
+        commonHeaders,
+        maxAbsDeltaByHeader,
+        conflicts
+    };
+}
+
+function buildGuidance(eventsFiles, counterFiles, rejectedCandidates, pairingError, comparisons) {
+    const guidance = [];
+    if (pairingError) {
+        guidance.push('This candidate set is not ready. Select the intended exports or place only the intended pairs in a clean temporary input directory.');
+        guidance.push('Prepare accepts one or two unambiguous TXT+CSV pairs; it does not merge or auto-select extra CSV files.');
+    } else {
+        guidance.push('The proposed pairs are the files that normal prepare will use.');
+    }
+    if (rejectedCandidates.length) {
+        guidance.push('Rejected TXT/CSV files are ignored. Review them only if one was intended to be a RenderDoc export.');
+    }
+    if (comparisons.some(comparison => comparison.conflicts.length || comparison.rowCountDelta)) {
+        guidance.push('CSV candidates contain differing values. Do not merge them or treat them as interchangeable; keep both when they are an explicit before/after pair.');
+    }
+    if (comparisons.some(comparison => !comparison.comparable)) {
+        guidance.push('Some CSV candidates have no comparable EID/counter intersection; zero conflict counts for those pairs do not mean that their values agree.');
+    }
+    if (!eventsFiles.length || !counterFiles.length) {
+        guidance.push('Add at least one valid RenderDoc Event Browser TXT and one valid counter CSV.');
+    }
+    return guidance;
+}
+
+/**
+ * Inspect candidate exports without creating a perf-analysis directory or any other file.
+ * The returned object is intentionally JSON-serializable for the CLI and tests.
+ */
+export async function inspectCandidates(targetDir) {
+    const resolvedTargetDir = path.resolve(targetDir || process.cwd());
+    const stat = await fs.stat(resolvedTargetDir).catch(() => null);
+    if (!stat?.isDirectory()) throw new Error(`Directory does not exist: ${resolvedTargetDir}`);
+
+    const { eventsFiles, counterFiles, rejectedCandidates } = await readCandidates(resolvedTargetDir);
+    const comparisons = [];
+    for (let i = 0; i < counterFiles.length; i++) {
+        for (let j = i + 1; j < counterFiles.length; j++) {
+            comparisons.push(compareCounterFiles(counterFiles[i], counterFiles[j]));
+        }
+    }
+
+    let pairs = [];
+    let pairingError = null;
+    try {
+        pairs = choosePairs(eventsFiles, counterFiles);
+    } catch (error) {
+        pairingError = error.message;
+    }
+    const proposedPairs = pairs.map(([eventsFile, counterFile], index) => ({
+        eventsFile: eventsFile.name,
+        countersFile: counterFile.name,
+        label: labelPair(eventsFile, counterFile, index, pairs.length)
+    }));
+    const ready = !pairingError;
+    const status = ready
+        ? 'ready'
+        : (eventsFiles.length > 0 && counterFiles.length > eventsFiles.length
+            ? 'ambiguous-counter-alternatives'
+            : (/pairing is ambiguous/i.test(pairingError || '') ? 'ambiguous-pairing' : 'not-ready'));
+    return {
+        targetDir: resolvedTargetDir,
+        events: eventsFiles.map(describeEventCandidate),
+        counters: counterFiles.map(describeCounterCandidate),
+        rejected: rejectedCandidates,
+        coverage: buildCoverageMatrix(eventsFiles, counterFiles),
+        csvComparisons: comparisons,
+        readiness: {
+            ready,
+            status,
+            reason: pairingError,
+            candidatePairCount: pairs.length
+        },
+        proposedPairs,
+        guidance: buildGuidance(eventsFiles, counterFiles, rejectedCandidates, pairingError, comparisons)
+    };
+}
+
+function artifactMetadata(file, content) {
+    const bytes = Buffer.from(content, 'utf8');
+    return {
+        file,
+        sizeBytes: bytes.length,
+        sha256: createHash('sha256').update(bytes).digest('hex')
+    };
+}
+
+async function artifactMatches(caseDir, artifact, expectedFile = null) {
+    if (!artifact || typeof artifact.file !== 'string' || path.basename(artifact.file) !== artifact.file) return false;
+    if (expectedFile && artifact.file !== expectedFile) return false;
+    if (!Number.isInteger(artifact.sizeBytes) || artifact.sizeBytes <= 0 || !/^[a-f0-9]{64}$/.test(artifact.sha256 || '')) return false;
+    try {
+        const content = await fs.readFile(path.join(caseDir, artifact.file));
+        return content.length === artifact.sizeBytes
+            && createHash('sha256').update(content).digest('hex') === artifact.sha256;
+    } catch {
+        return false;
+    }
 }
 
 async function canReuseCase(reportPath, manifestPath, guidePath, fingerprint) {
     try {
-        const [reportStat, manifestStat, guideStat, manifestText] = await Promise.all([
-            fs.stat(reportPath),
-            fs.stat(manifestPath),
-            fs.stat(guidePath),
-            fs.readFile(manifestPath, 'utf8')
-        ]);
-        if (![reportStat, manifestStat, guideStat].every(stat => stat.isFile() && stat.size > 0)) return false;
-        const manifest = JSON.parse(manifestText);
-        if (manifest.fingerprint !== fingerprint) return false;
-        const tailSize = Math.min(reportStat.size, 256);
-        const tail = Buffer.alloc(tailSize);
-        const handle = await fs.open(reportPath, 'r');
-        try {
-            await handle.read(tail, 0, tailSize, reportStat.size - tailSize);
-        } finally {
-            await handle.close();
+        const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8'));
+        if (manifest.fingerprint !== fingerprint || manifest.schemaVersion !== SCHEMA_VERSION) return false;
+        if (!Array.isArray(manifest.captures) || !manifest.captures.length) return false;
+        const caseDir = path.dirname(manifestPath);
+        const graphs = manifest.artifacts?.graphs;
+        if (!Array.isArray(graphs) || graphs.length !== manifest.captures.length) return false;
+        if (!await artifactMatches(caseDir, manifest.artifacts?.report, path.basename(reportPath))) return false;
+        if (!await artifactMatches(caseDir, manifest.artifacts?.guide, path.basename(guidePath))) return false;
+        for (let index = 0; index < manifest.captures.length; index++) {
+            const capture = manifest.captures[index];
+            const graph = graphs[index];
+            if (graph.file !== capture.graphFile || graph.recordCount !== capture.summary?.eventCount) return false;
+            if (!await artifactMatches(caseDir, graph, capture.graphFile)) return false;
         }
-        return tail.toString('utf8').includes('</html>');
+        return true;
     } catch {
         return false;
     }
@@ -490,9 +800,20 @@ export async function prepare(targetDir, outputDir = null) {
         fs.readFile(fileURLToPath(import.meta.url), 'utf8')
     ]);
     const catalog = JSON.parse(catalogText);
-    const { eventsFiles, counterFiles } = await readCandidates(targetDir);
+    const { eventsFiles, counterFiles, rejected } = await readCandidates(targetDir);
     const warnings = [];
-    const pairs = choosePairs(eventsFiles, counterFiles, warnings);
+    if (rejected.length) {
+        warnings.push(`Ignored ${rejected.length} invalid TXT/CSV candidate${rejected.length === 1 ? '' : 's'}: ${rejected.slice(0, 4).join('; ')}${rejected.length > 4 ? '; ...' : ''}`);
+    }
+    let pairs;
+    try {
+        pairs = choosePairs(eventsFiles, counterFiles);
+    } catch (error) {
+        const details = rejected.slice(0, 4);
+        if (details.length) error.message += ` Rejected candidates: ${details.join('; ')}`;
+        error.message += ' Run `node prepare.mjs <directory> --list` to inspect candidates; no CSVs are merged or auto-selected.';
+        throw error;
+    }
     const captures = pairs.map(([eventsFile, countersFile], index) => {
         const label = labelPair(eventsFile, countersFile, index, pairs.length);
         return prepareCapture(label, eventsFile, countersFile);
@@ -516,6 +837,11 @@ export async function prepare(targetDir, outputDir = null) {
     captures.forEach(capture => {
         if (capture.summary.missingLeafCount) warnings.push(`${capture.label}: ${capture.summary.missingLeafCount} leaf events have no counter row.`);
         if (capture.summary.unmatchedCounterCount) warnings.push(`${capture.label}: ${capture.summary.unmatchedCounterCount} counter rows do not match an exported event EID.`);
+        if (capture.anomalies.length) {
+            const count = capture.anomalies.reduce((sum, anomaly) => sum + anomaly.count, 0);
+            const example = capture.anomalies[0];
+            warnings.push(`${capture.label}: raw CSV contains ${count} percentage values outside -1..101 across ${capture.anomalies.length} counters (for example ${example.header}: ${example.min}..${example.max}). Values were preserved, not clamped.`);
+        }
     });
     if (captures.length === 2) {
         const firstHeaders = new Set(captures[0].headers);
@@ -527,9 +853,11 @@ export async function prepare(targetDir, outputDir = null) {
 
     const hash = createHash('sha256');
     hash.update(`${TOOL_VERSION}:${SCHEMA_VERSION}\n`);
+    hash.update(`${path.resolve(targetDir)}\n`);
     hash.update(template);
     hash.update(catalogText);
     hash.update(analyzerText);
+    hash.update(`${JSON.stringify(rejected)}\n`);
     pairs.flat().forEach(source => { hash.update(source.name); hash.update(source.content); });
     const fingerprint = hash.digest('hex');
     const analysisRoot = outputDir || path.join(targetDir, 'perf-analysis');
@@ -548,8 +876,9 @@ export async function prepare(targetDir, outputDir = null) {
     const captureFiles = [];
     for (const capture of captures) {
         const fileName = `capture-${capture.fileLabel}.ndjson`;
-        await fs.writeFile(path.join(caseDir, fileName), `${capture.records.map(record => JSON.stringify(record)).join('\n')}\n`, 'utf8');
-        captureFiles.push(fileName);
+        const content = `${capture.records.map(record => JSON.stringify(record)).join('\n')}\n`;
+        await fs.writeFile(path.join(caseDir, fileName), content, 'utf8');
+        captureFiles.push({ ...artifactMetadata(fileName, content), recordCount: capture.records.length });
     }
 
     const comparison = makeComparison(captures);
@@ -573,7 +902,11 @@ export async function prepare(targetDir, outputDir = null) {
             label: capture.label,
             title: capture.captureTitle,
             headers: capture.headers,
+            counterKinds: capture.counterKinds,
             durationHeader: capture.durationHeader,
+            durationToMs: capture.durationToMs,
+            weightHeader: capture.weightHeader,
+            anomalies: capture.anomalies,
             summary: capture.summary,
             records: capture.records
         }))
@@ -581,11 +914,13 @@ export async function prepare(targetDir, outputDir = null) {
     const payload = JSON.stringify(reportData).replace(/</g, '\\u003c').replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029');
     const report = template.replace('__REPORT_DATA__', payload);
     if (report === template) throw new Error('Report template is missing __REPORT_DATA__ placeholder');
+    const guide = renderGuide(targetDir, caseDir, captures, warnings);
 
     const manifest = {
         schemaVersion: SCHEMA_VERSION,
         toolVersion: TOOL_VERSION,
         metricsEncoding: 'sparse-zero-omitted',
+        metricAvailability: 'counterRowCount-zero-means-unmeasured',
         fingerprint,
         generatedAt: reportData.generatedAt,
         sourceDirectory: targetDir,
@@ -595,11 +930,13 @@ export async function prepare(targetDir, outputDir = null) {
             label: capture.label,
             eventsFile: capture.eventsFile,
             countersFile: capture.countersFile,
-            graphFile: captureFiles[index],
+            graphFile: captureFiles[index].file,
             headers: capture.headers,
             counterKinds: capture.counterKinds,
             durationHeader: capture.durationHeader,
+            durationToMs: capture.durationToMs,
             weightHeader: capture.weightHeader,
+            anomalies: capture.anomalies,
             summary: capture.summary,
             missingLeafEids: capture.missingLeafEids,
             unmatchedCounterEids: capture.unmatchedCounterEids
@@ -610,13 +947,18 @@ export async function prepare(targetDir, outputDir = null) {
             onlyFirstCount: comparison.onlyFirstCount,
             onlySecondCount: comparison.onlySecondCount
         } : null,
-        warnings
+        warnings,
+        artifacts: {
+            report: artifactMetadata('report.html', report),
+            guide: artifactMetadata('model-guide.md', guide),
+            graphs: captureFiles
+        }
     };
 
     await Promise.all([
         fs.writeFile(reportPath, report, 'utf8'),
         fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8'),
-        fs.writeFile(guidePath, renderGuide(targetDir, caseDir, captures, warnings), 'utf8')
+        fs.writeFile(guidePath, guide, 'utf8')
     ]);
     await fs.mkdir(analysisRoot, { recursive: true });
     await fs.writeFile(path.join(analysisRoot, 'latest.json'), `${JSON.stringify({ fingerprint, caseDir }, null, 2)}\n`, 'utf8');
@@ -626,7 +968,9 @@ export async function prepare(targetDir, outputDir = null) {
 async function main() {
     try {
         const args = parseArgs(process.argv.slice(2));
-        const result = await prepare(args.targetDir, args.outputDir);
+        const result = args.list
+            ? await inspectCandidates(args.targetDir)
+            : await prepare(args.targetDir, args.outputDir);
         process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     } catch (error) {
         process.stderr.write(`renderdoc-perf: ${error.message}\n`);

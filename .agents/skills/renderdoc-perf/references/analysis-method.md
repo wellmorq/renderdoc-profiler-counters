@@ -8,6 +8,8 @@ Identify the intended marker or pass in both captures. If several independent no
 
 Before making a causal claim, check whether the captures appear comparable: same intended scene/camera, resolution, API/GPU, marker structure, and counter set. Report observable structural mismatches. The exports usually cannot prove that the external workload was controlled.
 
+Treat a focused before/after topology warning as a comparison warning, not as a harmless naming detail: added, removed, or moved matching roots mean the aggregates cover different event sets. Confirm the intended regions before attributing the delta to implementation cost.
+
 ## Explain the change in three layers
 
 ### 1. More work
@@ -25,6 +27,7 @@ The focused query may show a mixed invocation ratio using region-wide instructio
 Example: "Pixel count is stable, but shader instructions grew 55%, so each shaded pixel is doing more computation."
 
 NVIDIA `sm__inst_executed` is a hardware instruction metric, not necessarily a one-to-one source instruction count. Relative changes are more reliable than literal source-level interpretations.
+Do not divide an `.avg` instruction counter by warp size or shader invocations unless the NVIDIA definition explicitly establishes that denominator. An `.avg` suffix alone does not mean "per warp" or "per thread".
 
 ### 3. Less efficient execution
 
@@ -54,6 +57,12 @@ Distinguish:
 Do not claim "more vertex attributes" from vertex count alone. A rise in bytes per vertex supports heavier vertex data, but exact attribute count and layout require pipeline-state evidence. Likewise, counters alone do not identify the shader keyword or source edit that caused an instruction increase.
 
 When a preferred `.sum` counter is absent and only an `.avg` variant exists, compare that average as its own signal. Do not normalize an average counter again as though it were a region-wide total.
+
+An event with `counterRowCount: 0` is not measured. Its missing metric keys are unknown, not zeros, and it must not be used to claim that a workload or stall disappeared. For measured records, omitted metric keys are sparse encoded numeric zeros.
+
+The prepared summary and focused query normalize recognized RenderDoc duration units (`s`, `ms`, `µs`/`us`, `ns`) to milliseconds. The raw duration counter stored in NDJSON keeps the CSV unit; apply `durationToMs` when inspecting it directly.
+
+For generated parent markers, `.avg`, `.pct`, and `.ratio` values are duration-weighted estimates across descendant actions. They are useful summaries, but they are not exact marker-wide recomputations. A true aggregate hit rate, stall percentage, or similar ratio requires the metric's numerator and denominator; otherwise inspect the descendant range and describe the marker value as an estimate.
 
 ## Finish with discriminating checks
 
