@@ -1,6 +1,21 @@
 import { promises as fs } from 'node:fs';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+const SCHEMA_VERSION = 3;
+const METRICS_ENCODING = 'sparse-zero-omitted';
+
+function durationScaleToMs(header) {
+    const match = String(header || '').trim().match(/^(?:GPU )?Duration\s*\((s|ms|us|µs|μs|ns)\)$/i);
+    if (!match) return null;
+    const unit = match[1].toLowerCase().replace(/[µμ]/g, 'u');
+    if (unit === 's') return 1000;
+    if (unit === 'ms') return 1;
+    if (unit === 'us') return 0.001;
+    if (unit === 'ns') return 0.000001;
+    return null;
+}
 
 function parseArgs(argv) {
     let json = false;
@@ -46,7 +61,12 @@ function parseArgs(argv) {
 }
 
 async function exists(file) {
-    return fs.stat(file).then(value => value.isFile()).catch(() => false);
+    try {
+        return (await fs.stat(file)).isFile();
+    } catch (error) {
+        if (error.code === 'ENOENT') return false;
+        throw error;
+    }
 }
 
 async function resolveCaseDir(inputDir) {
@@ -59,7 +79,10 @@ async function resolveCaseDir(inputDir) {
 
 async function readNdjson(file) {
     const text = await fs.readFile(file, 'utf8');
-    return text.split(/\r?\n/).filter(Boolean).map((line, index) => {
+    const lines = text.split(/\r?\n/);
+    if (lines.at(-1) === '') lines.pop();
+    if (lines.some(line => line.trim() === '')) throw new Error(`${file}: empty NDJSON line is not allowed`);
+    return lines.map((line, index) => {
         try {
             return JSON.parse(line);
         } catch (error) {
@@ -68,18 +91,175 @@ async function readNdjson(file) {
     });
 }
 
+function hasOwn(object, key) {
+    return Object.prototype.hasOwnProperty.call(object, key);
+}
+
+function metricValue(record, header) {
+    if (!isMeasured(record)) return null;
+    if (!hasOwn(record.metrics, header)) return 0;
+    const value = record.metrics[header];
+    return value === null ? null : (Number.isFinite(value) ? value : null);
+}
+
+function aggregationMethod(record, header) {
+    return record.aggregation.method || record.aggregation.methods[header];
+}
+
+function validateArtifactDescriptor(descriptor, expectedFile, label, requireRecordCount = false) {
+    if (!descriptor || descriptor.file !== expectedFile || path.basename(descriptor.file) !== descriptor.file) {
+        throw new Error(`${label}: invalid artifact file descriptor`);
+    }
+    if (!Number.isInteger(descriptor.sizeBytes) || descriptor.sizeBytes <= 0 || !/^[a-f0-9]{64}$/.test(descriptor.sha256 || '')) {
+        throw new Error(`${label}: invalid artifact size or SHA-256 descriptor`);
+    }
+    if (requireRecordCount && (!Number.isInteger(descriptor.recordCount) || descriptor.recordCount < 1)) {
+        throw new Error(`${label}: invalid artifact recordCount`);
+    }
+}
+
+async function verifyArtifact(caseDir, descriptor, expectedFile, label, expectedRecordCount = null) {
+    validateArtifactDescriptor(descriptor, expectedFile, label, expectedRecordCount !== null);
+    const content = await fs.readFile(path.join(caseDir, descriptor.file));
+    if (content.length !== descriptor.sizeBytes) throw new Error(`${label}: artifact size does not match manifest`);
+    const sha256 = createHash('sha256').update(content).digest('hex');
+    if (sha256 !== descriptor.sha256) throw new Error(`${label}: artifact SHA-256 does not match manifest`);
+    if (expectedRecordCount === null) return null;
+    if (descriptor.recordCount !== expectedRecordCount) throw new Error(`${label}: artifact recordCount does not match manifest summary`);
+    const records = await readNdjson(path.join(caseDir, descriptor.file));
+    if (records.length !== expectedRecordCount) throw new Error(`${label}: NDJSON record count does not match manifest summary`);
+    return records;
+}
+
+function validateGraph(records, capture, label) {
+    const expectedCount = capture.summary?.eventCount;
+    if (!Number.isInteger(expectedCount) || expectedCount < 1 || records.length !== expectedCount) {
+        throw new Error(`${label}: graph record count does not match capture summary`);
+    }
+    const headers = new Set(capture.headers);
+    const byKey = new Map();
+    const orders = new Set();
+    const eids = new Set();
+    records.forEach((record, index) => {
+        if (!record || typeof record !== 'object' || Array.isArray(record)) throw new Error(`${label}: record ${index + 1} is not an object`);
+        if (!Number.isInteger(record.eid) || record.eid < 0 || eids.has(record.eid)) throw new Error(`${label}: record ${index + 1} has an invalid or duplicate EID`);
+        eids.add(record.eid);
+        if (typeof record.stableKey !== 'string' || !record.stableKey || byKey.has(record.stableKey)) throw new Error(`${label}: record ${index + 1} has an invalid or duplicate stableKey`);
+        byKey.set(record.stableKey, record);
+        if (typeof record.name !== 'string' || typeof record.path !== 'string') throw new Error(`${label}: record ${index + 1} has invalid name/path`);
+        if (record.parentKey !== null && typeof record.parentKey !== 'string') throw new Error(`${label}: record ${index + 1} has an invalid parentKey`);
+        if (!Number.isInteger(record.depth) || record.depth < 0 || !Number.isInteger(record.order) || record.order < 0 || orders.has(record.order)) throw new Error(`${label}: record ${index + 1} has invalid or duplicate depth/order`);
+        orders.add(record.order);
+        if (!Number.isInteger(record.childCount) || record.childCount < 0 || !Number.isInteger(record.counterRowCount) || record.counterRowCount < 0) throw new Error(`${label}: record ${index + 1} has invalid child/counter row counts`);
+        if (record.scope !== (record.childCount ? 'descendants' : 'self')) throw new Error(`${label}: record ${index + 1} has inconsistent scope`);
+        if (!record.aggregation || !Number.isInteger(record.aggregation.rowCount) || record.aggregation.rowCount !== record.counterRowCount) throw new Error(`${label}: record ${index + 1} has invalid aggregation provenance`);
+        if (record.counterRowCount === 0) {
+            if (record.aggregation.source !== 'unavailable' || record.aggregation.method !== 'unavailable-no-rows' || record.aggregation.methods !== undefined) throw new Error(`${label}: unmeasured record ${index + 1} has invalid aggregation provenance`);
+        } else if (record.scope === 'self') {
+            if (record.counterRowCount !== 1 || record.aggregation.source !== 'self-row' || record.aggregation.method !== 'raw-self' || record.aggregation.methods !== undefined) throw new Error(`${label}: self record ${index + 1} has invalid aggregation provenance`);
+        } else {
+            if (record.aggregation.source !== 'descendant-rows' || record.aggregation.method !== undefined || !record.aggregation.methods || typeof record.aggregation.methods !== 'object' || Array.isArray(record.aggregation.methods)) throw new Error(`${label}: parent record ${index + 1} has invalid aggregation provenance`);
+            const aggregationEntries = Object.entries(record.aggregation.methods);
+            if (aggregationEntries.length !== headers.size) throw new Error(`${label}: record ${index + 1} is missing aggregation methods`);
+            aggregationEntries.forEach(([header, method]) => {
+                if (!headers.has(header) || typeof method !== 'string' || !method) throw new Error(`${label}: record ${index + 1} has invalid aggregation method metadata`);
+            });
+        }
+        if (!record.metrics || typeof record.metrics !== 'object' || Array.isArray(record.metrics)) throw new Error(`${label}: record ${index + 1} has invalid metrics`);
+        if (record.counterRowCount === 0 && Object.keys(record.metrics).length) throw new Error(`${label}: unmeasured record ${index + 1} contains metrics`);
+        Object.entries(record.metrics).forEach(([header, value]) => {
+            if (!headers.has(header)) throw new Error(`${label}: record ${index + 1} contains a metric not listed in headers`);
+            if (value !== null && !Number.isFinite(value)) throw new Error(`${label}: record ${index + 1} contains a non-finite metric`);
+            if (header === capture.durationHeader && (!Number.isFinite(value) || value < 0)) throw new Error(`${label}: record ${index + 1} contains an invalid duration metric`);
+        });
+        if (record.selfMetrics !== undefined) {
+            if (!record.selfMetrics || typeof record.selfMetrics !== 'object' || Array.isArray(record.selfMetrics)) throw new Error(`${label}: record ${index + 1} has invalid selfMetrics`);
+            Object.entries(record.selfMetrics).forEach(([header, value]) => {
+                if (!headers.has(header) || !Number.isFinite(value)) throw new Error(`${label}: record ${index + 1} has invalid selfMetrics`);
+                if (header === capture.durationHeader && value < 0) throw new Error(`${label}: record ${index + 1} contains an invalid self duration metric`);
+            });
+        }
+    });
+    const childCounts = new Map();
+    records.forEach(record => {
+        if (record.parentKey !== null) {
+            const parent = byKey.get(record.parentKey);
+            if (!parent || parent.stableKey === record.stableKey) throw new Error(`${label}: record ${record.stableKey} references a missing or self parent`);
+            if (record.depth !== parent.depth + 1) throw new Error(`${label}: record ${record.stableKey} has inconsistent depth`);
+            childCounts.set(record.parentKey, (childCounts.get(record.parentKey) || 0) + 1);
+        } else if (record.depth !== 0) {
+            throw new Error(`${label}: root record ${record.stableKey} has non-zero depth`);
+        }
+    });
+    records.forEach(record => {
+        if ((childCounts.get(record.stableKey) || 0) !== record.childCount) throw new Error(`${label}: childCount mismatch for ${record.stableKey}`);
+        const seen = new Set();
+        let parentKey = record.parentKey;
+        while (parentKey !== null) {
+            if (seen.has(parentKey)) throw new Error(`${label}: parent cycle involving ${record.stableKey}`);
+            seen.add(parentKey);
+            parentKey = byKey.get(parentKey).parentKey;
+        }
+    });
+}
+
+async function validateCase(caseDir, manifest) {
+    if (manifest.schemaVersion !== SCHEMA_VERSION) throw new Error(`Unsupported case schema ${manifest.schemaVersion}; re-run prepare.mjs to rebuild schema ${SCHEMA_VERSION}`);
+    if (manifest.metricsEncoding !== METRICS_ENCODING) throw new Error(`Unsupported metrics encoding; expected ${METRICS_ENCODING}`);
+    if (manifest.metricAvailability !== 'counterRowCount-zero-means-unmeasured') throw new Error('Unsupported metric availability contract');
+    if (typeof manifest.report !== 'string' || path.basename(manifest.report) !== manifest.report || typeof manifest.guide !== 'string' || path.basename(manifest.guide) !== manifest.guide) throw new Error('Manifest must declare exact report and guide artifact names');
+    if (!Array.isArray(manifest.warnings) || manifest.warnings.some(warning => typeof warning !== 'string')) throw new Error('Manifest has invalid warnings metadata');
+    if (!Array.isArray(manifest.captures) || manifest.captures.length < 1 || manifest.captures.length > 2) throw new Error('Manifest must contain one or two captures');
+    const artifacts = manifest.artifacts;
+    if (!artifacts || !Array.isArray(artifacts.graphs) || artifacts.graphs.length !== manifest.captures.length) throw new Error('Manifest is missing graph artifact descriptors');
+    await verifyArtifact(caseDir, artifacts.report, manifest.report, 'report');
+    await verifyArtifact(caseDir, artifacts.guide, manifest.guide, 'guide');
+    const graphRecords = [];
+    for (let index = 0; index < manifest.captures.length; index++) {
+        const capture = manifest.captures[index];
+        if (!capture || !Array.isArray(capture.headers) || capture.headers.some(header => typeof header !== 'string' || !header) || new Set(capture.headers).size !== capture.headers.length) throw new Error(`Capture ${index + 1}: invalid headers`);
+        const durationHeaders = capture.headers.filter(header => durationScaleToMs(header) !== null);
+        if (durationHeaders.length !== 1 || capture.durationHeader !== durationHeaders[0]) throw new Error(`Capture ${index + 1}: manifest must contain exactly one explicit GPU/Duration header`);
+        const expectedScale = durationScaleToMs(capture.durationHeader);
+        if (capture.durationToMs !== expectedScale || capture.weightHeader !== capture.durationHeader) throw new Error(`Capture ${index + 1}: invalid duration scale or mean weight header`);
+        if (!capture.counterKinds || capture.headers.some(header => !['sum', 'max', 'min', 'mean', 'unknown'].includes(capture.counterKinds[header]))) throw new Error(`Capture ${index + 1}: invalid counter kind metadata`);
+        if (capture.counterKinds[capture.durationHeader] !== 'sum') throw new Error(`Capture ${index + 1}: duration counter must be additive`);
+        const summary = capture.summary;
+        const validRootSummary = Number.isInteger(summary?.rootCount) && summary.rootCount >= 1
+            && Number.isInteger(summary.measuredRootCount) && summary.measuredRootCount >= 0
+            && Number.isInteger(summary.unmeasuredRootCount) && summary.unmeasuredRootCount >= 0
+            && summary.measuredRootCount + summary.unmeasuredRootCount === summary.rootCount;
+        const validTotal = summary?.measuredRootCount === 0
+            ? summary.totalDurationMs === null
+            : Number.isFinite(summary?.totalDurationMs) && summary.totalDurationMs >= 0;
+        if (!summary || !Number.isInteger(summary.eventCount) || summary.eventCount < 1 || !validRootSummary || !Number.isInteger(summary.counterRowCount) || summary.counterRowCount < 0 || !Number.isInteger(summary.missingLeafCount) || summary.missingLeafCount < 0 || !Number.isInteger(summary.metricCount) || summary.metricCount !== capture.headers.length || !validTotal) throw new Error(`Capture ${index + 1}: invalid summary`);
+        const descriptor = artifacts.graphs[index];
+        if (descriptor.file !== capture.graphFile) throw new Error(`Capture ${index + 1}: graph artifact does not match capture graphFile`);
+        const records = await verifyArtifact(caseDir, descriptor, capture.graphFile, `capture ${index + 1} graph`, capture.summary.eventCount);
+        validateGraph(records, capture, `capture ${index + 1} graph`);
+        graphRecords.push(records);
+    }
+    return graphRecords;
+}
+
 function isMeasured(record) {
     return Boolean(record && record.counterRowCount > 0);
 }
 
 function durationMetricValue(record, capture) {
     if (!isMeasured(record) || !capture.durationHeader) return null;
-    const raw = record.metrics[capture.durationHeader] ?? 0;
-    return Number.isFinite(raw) ? raw * (capture.durationToMs ?? 1) : null;
+    const raw = metricValue(record, capture.durationHeader);
+    return Number.isFinite(raw) && Number.isFinite(capture.durationToMs)
+        ? raw * capture.durationToMs
+        : null;
 }
 
-function durationValue(record, capture) {
-    return durationMetricValue(record, capture) ?? 0;
+function compareDurationDescending(a, b, capture) {
+    const aDuration = durationMetricValue(a, capture);
+    const bDuration = durationMetricValue(b, capture);
+    if (aDuration === null) return bDuration === null ? a.order - b.order : 1;
+    if (bDuration === null) return -1;
+    return bDuration - aDuration || a.order - b.order;
 }
 
 function findFrontier(records, query) {
@@ -160,7 +340,7 @@ function buildHierarchy(records, roots, capture, depth, top, selectedHeaders) {
 
     const byKey = new Map(records.map(record => [record.stableKey, record]));
     const exportedHeaders = new Set(capture.headers);
-    const captureDuration = capture.summary?.totalDurationMs;
+    const captureDuration = capture.summary.totalDurationMs;
     const shownRoots = top === null ? roots : roots.slice(0, top);
     return shownRoots.map(root => {
         const nodes = [];
@@ -182,7 +362,7 @@ function buildHierarchy(records, roots, capture, depth, top, selectedHeaders) {
                 captureShare: Number.isFinite(duration) && captureDuration > 0 ? duration / captureDuration : null,
                 metrics: Object.fromEntries(selectedHeaders.map(header => [
                     header,
-                    exportedHeaders.has(header) && measured ? (record.metrics[header] ?? 0) : null
+                    exportedHeaders.has(header) ? metricValue(record, header) : null
                 ])),
                 childCount: record.childCount,
                 shownChildCount: relativeDepth >= depth ? null : 0
@@ -192,59 +372,65 @@ function buildHierarchy(records, roots, capture, depth, top, selectedHeaders) {
             const children = childrenByParent.get(record.stableKey) || [];
             const shownChildren = top === null
                 ? children
-                : [...children].sort((a, b) => durationValue(b, capture) - durationValue(a, capture) || a.order - b.order).slice(0, top);
+                : [...children].sort((a, b) => compareDurationDescending(a, b, capture)).slice(0, top);
             node.shownChildCount = shownChildren.length;
             for (const child of shownChildren) {
                 visit(child, relativeDepth + 1, duration);
             }
         };
         const actualParent = root.parentKey ? byKey.get(root.parentKey) : null;
-        visit(root, 0, actualParent ? durationValue(actualParent, capture) : NaN);
+        visit(root, 0, actualParent ? durationMetricValue(actualParent, capture) : null);
         return { rootKey: root.stableKey, nodes };
     });
 }
 
 function aggregate(records, capture) {
     const result = {};
+    const meanMethods = {};
     const measuredRecords = records.filter(isMeasured);
     for (const header of capture.headers) {
         if (!measuredRecords.length) {
             result[header] = null;
+            if (capture.counterKinds[header] === 'mean') meanMethods[header] = 'unavailable-no-measured-rows';
+            continue;
+        }
+        const values = measuredRecords.map(record => metricValue(record, header));
+        if (capture.counterKinds[header] === 'unknown') {
+            result[header] = measuredRecords.length === 1 && Number.isFinite(values[0]) ? values[0] : null;
+            if (measuredRecords.length > 1) meanMethods[header] = 'unavailable-unknown-kind';
             continue;
         }
         if (capture.counterKinds[header] === 'max') {
-            const values = measuredRecords.map(record => record.metrics[header] ?? 0).filter(Number.isFinite);
-            result[header] = values.length ? values.reduce((maximum, value) => Math.max(maximum, value), -Infinity) : 0;
+            const finiteValues = values.filter(Number.isFinite);
+            result[header] = finiteValues.length ? finiteValues.reduce((maximum, value) => Math.max(maximum, value), -Infinity) : null;
             continue;
         }
         if (capture.counterKinds[header] === 'min') {
-            const values = measuredRecords.map(record => record.metrics[header] ?? 0).filter(Number.isFinite);
-            result[header] = values.length ? values.reduce((minimum, value) => Math.min(minimum, value), Infinity) : 0;
+            const finiteValues = values.filter(Number.isFinite);
+            result[header] = finiteValues.length ? finiteValues.reduce((minimum, value) => Math.min(minimum, value), Infinity) : null;
             continue;
         }
         if (capture.counterKinds[header] !== 'mean') {
-            result[header] = measuredRecords.reduce((sum, record) => sum + (Number.isFinite(record.metrics[header]) ? record.metrics[header] : 0), 0);
+            result[header] = values.every(Number.isFinite) ? values.reduce((sum, value) => sum + value, 0) : null;
             continue;
         }
-        let weighted = 0;
-        let weightSum = 0;
-        let fallbackWeighted = 0;
-        let fallbackWeightSum = 0;
-        for (const record of measuredRecords) {
-            const value = record.metrics[header] ?? 0;
-            if (!Number.isFinite(value)) continue;
-            const fallbackWeight = Math.max(1, record.counterRowCount || 0);
-            fallbackWeighted += value * fallbackWeight;
-            fallbackWeightSum += fallbackWeight;
-            const weight = capture.weightHeader ? record.metrics[capture.weightHeader] : NaN;
-            if (Number.isFinite(weight) && weight > 0) {
-                weighted += value * weight;
-                weightSum += weight;
-            }
+        if (measuredRecords.length === 1) {
+            result[header] = Number.isFinite(values[0]) ? values[0] : null;
+            meanMethods[header] = aggregationMethod(measuredRecords[0], header);
+            continue;
         }
-        result[header] = weightSum > 0 ? weighted / weightSum : (fallbackWeightSum > 0 ? fallbackWeighted / fallbackWeightSum : 0);
+        const weightedRows = measuredRecords.map((record, index) => ({ value: values[index], weight: durationMetricValue(record, capture) }));
+        const weightsAreValid = weightedRows.every(row => Number.isFinite(row.weight) && row.weight >= 0 && (row.weight === 0 || Number.isFinite(row.value)));
+        if (weightsAreValid && weightedRows.some(row => row.weight > 0)) {
+            const weightSum = weightedRows.reduce((sum, row) => sum + row.weight, 0);
+            result[header] = weightedRows.reduce((sum, row) => sum + (row.weight > 0 ? row.value * row.weight : 0), 0) / weightSum;
+            meanMethods[header] = weightedRows.every(row => row.weight > 0) ? 'duration-weighted' : 'duration-weighted-partial';
+        } else {
+            result[header] = null;
+            meanMethods[header] = 'unavailable-no-positive-duration';
+        }
     }
-    return result;
+    return { metrics: result, meanMethods };
 }
 
 function findHeader(headers, patterns) {
@@ -267,8 +453,8 @@ function coreSignals(capture, metrics, allowedHeaders = null) {
             estimated: capture.counterKinds[header] === 'mean' && capture.aggregateMeanIsEstimate
         } : null;
     };
-    const durationValue = capture.durationHeader && Number.isFinite(metrics[capture.durationHeader])
-        ? metrics[capture.durationHeader] * (capture.durationToMs ?? 1)
+    const durationValue = capture.durationHeader && Number.isFinite(metrics[capture.durationHeader]) && Number.isFinite(capture.durationToMs)
+        ? metrics[capture.durationHeader] * capture.durationToMs
         : null;
     const signals = {
         duration: Number.isFinite(durationValue) ? { header: capture.durationHeader, value: durationValue, estimated: false } : null,
@@ -289,12 +475,14 @@ function coreSignals(capture, metrics, allowedHeaders = null) {
         lgThrottle: resolve([/^smsp__warp_issue_stalled_lg_throttle.*\.pct/i]),
         texThrottle: resolve([/^smsp__warp_issue_stalled_tex_throttle.*\.pct/i])
     };
-    const invocationCount = ['vsInvocations', 'psInvocations', 'csInvocations']
-        .map(key => signals[key]?.value || 0)
-        .reduce((sum, value) => sum + value, 0);
-    const isAggregate = signal => signal && !/\.avg(?:\.|\s|$)/i.test(signal.header);
+    const invocationSignals = ['vsInvocations', 'psInvocations', 'csInvocations'].map(key => signals[key]);
+    const invocationCount = invocationSignals.every(signal => signal && Number.isFinite(signal.value))
+        ? invocationSignals.reduce((sum, signal) => sum + signal.value, 0)
+        : null;
+    const isAggregate = signal => signal && capture.counterKinds[signal.header] === 'sum';
     const dramBytes = isAggregate(signals.dramRead) && isAggregate(signals.dramWrite)
-        ? (signals.dramRead?.value || 0) + (signals.dramWrite?.value || 0)
+        && Number.isFinite(signals.dramRead.value) && Number.isFinite(signals.dramWrite.value)
+        ? signals.dramRead.value + signals.dramWrite.value
         : null;
     signals.derived = {
         invocationCount,
@@ -333,7 +521,8 @@ function metricCells(record, headers, exportedHeaders) {
     return headers.map(header => {
         if (!exported.has(header)) return 'not exported';
         if (!isMeasured(record)) return 'not measured';
-        return formatNumber(record.metrics[header] ?? 0);
+        const value = metricValue(record, header);
+        return formatNumber(value);
     });
 }
 
@@ -417,8 +606,10 @@ function renderMarkdown(result) {
         if (capture.matchesTruncated) lines.push('', 'The match list is truncated by `--top`; aggregate metrics and before/after comparison still include every independent matched root.');
         lines.push('');
         const estimatedHeaders = selectedHeaders.filter(header => capture.counterKinds[header] === 'mean');
-        if (estimatedHeaders.length && capture.matches.some(record => record.scope === 'descendants')) {
-            lines.push('Selected `.avg`, `.pct`, and `.ratio` values on generated parent rows are duration-weighted estimates over descendant actions; leaf `self` rows retain raw CSV values.', '');
+        if (estimatedHeaders.length) {
+            lines.push('Mean counters are raw for one contributing row and duration-weighted for multiple rows. If no positive GPU-duration weight exists, the aggregate is unavailable; arithmetic and counter-row fallbacks are not used.', '');
+            const unavailableMeans = estimatedHeaders.filter(header => String(capture.aggregateMeanMethods?.[header] || '').startsWith('unavailable'));
+            if (unavailableMeans.length) lines.push(`Unavailable mean aggregates: ${unavailableMeans.join(', ')}.`, '');
         }
         const selectedSet = new Set(selectedHeaders);
         const showInstructionRatio = capture.signals.instructions
@@ -551,18 +742,21 @@ export async function queryCase(inputDir, query, options = {}) {
     if (!Array.isArray(metricSelectors)) throw new Error('metrics must be an array of selectors');
     const caseDir = await resolveCaseDir(inputDir);
     const manifest = JSON.parse(await fs.readFile(path.join(caseDir, 'manifest.json'), 'utf8'));
+    const graphRecords = await validateCase(caseDir, manifest);
     const selectedMetricHeaders = resolveMetricSelectors(manifest.captures, metricSelectors);
-    const warnings = [...(manifest.warnings || [])];
+    const warnings = [...manifest.warnings];
     const captures = [];
     const focusedKeySets = [];
-    for (const capture of manifest.captures) {
-        const records = await readNdjson(path.join(caseDir, capture.graphFile));
-        const allMatches = findFrontier(records, query).sort((a, b) => durationValue(b, capture) - durationValue(a, capture));
+    for (let index = 0; index < manifest.captures.length; index++) {
+        const capture = manifest.captures[index];
+        const records = graphRecords[index];
+        const allMatches = findFrontier(records, query).sort((a, b) => compareDurationDescending(a, b, capture));
         const measuredMatches = allMatches.filter(isMeasured);
         focusedKeySets.push(new Set(allMatches.map(record => record.stableKey)));
         const unmeasuredMatchCount = allMatches.length - measuredMatches.length;
         const matches = top === null ? allMatches : allMatches.slice(0, top);
-        const metrics = aggregate(allMatches, capture);
+        const aggregateResult = aggregate(allMatches, capture);
+        const metrics = aggregateResult.metrics;
         const selectedHeaders = selectedMetricHeaders;
         const hierarchy = buildHierarchy(records, allMatches, capture, depth, top, selectedHeaders);
         const preparedCapture = {
@@ -576,7 +770,8 @@ export async function queryCase(inputDir, query, options = {}) {
             hierarchy,
             selectedHeaders,
             metrics,
-            aggregateMeanIsEstimate: measuredMatches.length > 1 || (measuredMatches.length === 1 && measuredMatches[0].scope !== 'self')
+            aggregateMeanMethods: aggregateResult.meanMethods,
+            aggregateMeanIsEstimate: Object.values(aggregateResult.meanMethods).some(method => method !== 'raw-self')
         };
         preparedCapture.signals = coreSignals(preparedCapture, metrics);
         captures.push(preparedCapture);

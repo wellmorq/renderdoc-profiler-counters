@@ -1,6 +1,7 @@
 'use strict';
 
 const assert = require('node:assert/strict');
+const { createHash } = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
@@ -50,6 +51,12 @@ function scaleCsv(text) {
     return `${lines.join('\n')}\n`;
 }
 
+function updateGraphDescriptor(manifest, captureIndex, graphText) {
+    const descriptor = manifest.artifacts.graphs[captureIndex];
+    descriptor.sizeBytes = Buffer.byteLength(graphText);
+    descriptor.sha256 = createHash('sha256').update(graphText).digest('hex');
+}
+
 async function main() {
 try {
     const { aggregateRows, detectCounterKind, inspectCandidates, parseCounters, parseEvents, prepare } = await import(pathToFileURL(prepareScript).href);
@@ -62,17 +69,28 @@ try {
     assert.equal(singleManifest.captures[0].summary.eventCount, 3704);
     assert.equal(singleManifest.captures[0].summary.counterRowCount, 3491);
     assert.equal(singleManifest.captures[0].summary.metricCount, 41);
-    assert.equal(singleManifest.schemaVersion, 2);
+    assert.equal(singleManifest.schemaVersion, 3);
     assert.equal(singleManifest.metricsEncoding, 'sparse-zero-omitted');
     assert.equal(singleManifest.metricAvailability, 'counterRowCount-zero-means-unmeasured');
     assert.ok(fs.statSync(single.report).size < 12_000_000, 'single report should stay compact enough for local use');
     assert.equal(detectCounterKind('counter.max'), 'max');
     assert.equal(detectCounterKind('counter.min'), 'min');
+    assert.equal(detectCounterKind('PS Invocations'), 'sum');
+    assert.equal(detectCounterKind('HS Invocations'), 'sum');
+    assert.equal(detectCounterKind('DS Invocations'), 'sum');
+    assert.equal(detectCounterKind('GS Invocations'), 'sum');
+    assert.equal(detectCounterKind('mystery counter'), 'unknown');
     assert.equal(aggregateRows([{ peak: 2 }, { peak: 5 }], ['peak'], { peak: 'max' }, null).peak, 5);
     assert.equal(aggregateRows([{ low: 2 }, { low: 5 }], ['low'], { low: 'min' }, null).low, 2);
     assert.equal(aggregateRows([{ pct: 10, time: 1 }, { pct: 30, time: 3 }], ['pct'], { pct: 'mean' }, 'time').pct, 25);
-    assert.equal(parseCounters('\uFEFFEID,"counter,value"\n1,"1,234.5"\n', 'quoted.csv').counters.get(1)['counter,value'], 1234.5);
+    assert.equal(aggregateRows([{ pct: 10, time: 0 }, { pct: 30, time: 0 }], ['pct'], { pct: 'mean' }, 'time').pct, null);
+    assert.equal(aggregateRows([{ value: 10 }, { value: 30 }], ['value'], { value: 'unknown' }, null).value, null);
+    assert.equal(parseCounters('\uFEFFEID,GPU Duration (ms),"counter,value"\n1,1,"1,234.5"\n', 'quoted.csv').counters.get(1)['counter,value'], 1234.5);
     assert.equal(parseCounters('EID,GPU Duration (µs)\n1,2500\n', 'microseconds.csv').durationToMs, 0.001);
+    assert.throws(() => parseCounters('EID,GPU Duration (ms)\n1,-1\n', 'negative-duration.csv'), /duration must be non-negative/);
+    assert.throws(() => parseCounters('EID,Counter\n1,1\n', 'no-duration.csv'), /exactly one GPU\/Duration counter/);
+    assert.throws(() => parseCounters('EID,GPU Duration\n1,1\n', 'unitless-duration.csv'), /explicit supported unit/);
+    assert.throws(() => parseCounters('EID,GPU Duration (ms),Duration (us)\n1,1,1000\n', 'two-durations.csv'), /exactly one GPU\/Duration counter/);
     assert.throws(() => parseCounters('EID,GPU Duration (ms)\n1,\n', 'blank.csv'), /empty counter value/);
     assert.throws(() => parseEvents('Fixture\n---\n1 | - First |\n1 | - Duplicate |\n', 'duplicate.txt'), /duplicate event EID 1/);
     assert.equal(parseEvents('Fixture\n---\n1 | - Pass | Variant | 7\n', 'pipe.txt').nodes[0].name, 'Pass | Variant');
@@ -91,6 +109,21 @@ try {
     const repairedGraph = await prepare(root, singleOutput);
     assert.equal(repairedGraph.status, 'prepared');
     assert.ok(fs.statSync(recoveredGraph).size > 0, 'prepare must rebuild a missing cached graph');
+    const cacheManifest = JSON.parse(fs.readFileSync(repairedGraph.manifest, 'utf8'));
+    cacheManifest.metricsEncoding = 'corrupt';
+    fs.writeFileSync(repairedGraph.manifest, JSON.stringify(cacheManifest, null, 2));
+    const repairedMetadata = await prepare(root, singleOutput);
+    assert.equal(repairedMetadata.status, 'prepared', 'prepare must not reuse cache with an invalid schema contract');
+    const invalidKindManifest = JSON.parse(fs.readFileSync(repairedMetadata.manifest, 'utf8'));
+    invalidKindManifest.captures[0].counterKinds[invalidKindManifest.captures[0].durationHeader] = 'mean';
+    fs.writeFileSync(repairedMetadata.manifest, JSON.stringify(invalidKindManifest, null, 2));
+    const repairedDurationKind = await prepare(root, singleOutput);
+    assert.equal(repairedDurationKind.status, 'prepared', 'prepare must not reuse cache with a non-additive duration kind');
+    const invalidSummaryManifest = JSON.parse(fs.readFileSync(repairedDurationKind.manifest, 'utf8'));
+    invalidSummaryManifest.captures[0].summary.totalDurationMs = -1;
+    fs.writeFileSync(repairedDurationKind.manifest, JSON.stringify(invalidSummaryManifest, null, 2));
+    const repairedSummary = await prepare(root, singleOutput);
+    assert.equal(repairedSummary.status, 'prepared', 'prepare must not reuse cache with an invalid duration summary');
 
     const compareInput = path.join(tempRoot, 'compare-input');
     const compareOutput = path.join(tempRoot, 'compare-output');
@@ -130,10 +163,31 @@ try {
     const report = fs.readFileSync(compared.report, 'utf8');
     assert.doesNotMatch(report, /__REPORT_DATA__/);
     assert.doesNotMatch(report, /<script[^>]+src=|<link[^>]+href=/i);
-    assert.match(report, /Matched event graph/);
-    assert.match(report, /Relative event timeline/);
+    assert.match(report, /id="frame-summary"/);
+    assert.match(report, /function renderFrameSummary/);
+    assert.match(report, /const captureTopologyIsValid/);
+    assert.match(report, /summary\.missingLeafCount !== missingLeaves/);
+    assert.match(report, /firstIndices\.has\(pair\[0\]\).*secondIndices\.has\(pair\[1\]\)/);
+    assert.match(report, /expectedMatchCount.*secondKeys\.has\(record\.stableKey\)/);
+    assert.doesNotMatch(report, /summary-card|addSummary\(|id="summary"|Matched event graph|Relative event timeline/);
+    assert.doesNotMatch(report, /addSummary\('(Events|Counter rows|Metrics|Missing leaves|Matched nodes|Shared metrics|Topology gaps)'/);
+    assert.doesNotMatch(report, /id="timeline-title"|id="timeline-status"|id="list-title"|id="list-meta"/);
+    assert.match(report, /'% frame'/);
+    assert.doesNotMatch(report, /values\.appendChild\(cell\('', `\$\{(?:beforeCapture|capture)\.label\}:/);
     assert.match(report, /id="timeline-grid"/);
-    assert.match(report, /not GPU start\/end timestamps/);
+    assert.doesNotMatch(report, /id="diagnostics"|renderDiagnostics/);
+    assert.match(report, /function renderMetricMetadata/);
+    assert.match(report, /metric-range-visual/);
+    assert.match(report, /const EXPECTED_SCHEMA_VERSION = 3/);
+    assert.match(report, /const EXPECTED_METRICS_ENCODING = 'sparse-zero-omitted'/);
+    assert.doesNotMatch(report, /record\.metrics\[header\] \?\? 0/);
+    assert.doesNotMatch(report, /show-empty|showEmpty|Show zero and unmeasured/);
+    assert.match(report, /hidden = !searched && !truncated/);
+    assert.match(report, /event-head\.single.*nth-child\(4\).*display: none/);
+    assert.match(report, /event-head\.compare.*nth-child\(3\).*display: none/);
+    assert.match(report, /timeline-block\.zero/);
+    assert.match(report, /timeline-block\.unmeasured/);
+    assert.doesNotMatch(report, /id="warnings"|class="warning"|id="timeline-note"|Select a pass or marker|not GPU start\/end timestamps/);
     assert.match(report, /function recordShares/);
     assert.match(report, /function descendantRange/);
     assert.doesNotMatch(report, /ASK AI|PluginManager|add-plugin/i);
@@ -203,8 +257,8 @@ try {
     assert.equal(depthNodes[2].name, 'ChildB');
     assert.equal(depthNodes[2].parentShare, 0.6);
     const treeMarkdown = renderMarkdown(treeDepth);
-    assert.match(treeMarkdown, /Aggregate normalization/);
-    assert.match(treeMarkdown, /Hardware instructions \/ mixed shader invocation \| 10/);
+    assert.equal(treeDepth.captures[0].signals.derived.invocationCount, null, 'missing stage invocation counters must not be treated as zero');
+    assert.doesNotMatch(treeMarkdown, /Hardware instructions \/ mixed shader invocation/);
     const treeDepthTwo = await queryCase(treeCase.caseDir, 'MainMarker', { depth: 2 });
     assert.equal(treeDepthTwo.captures[0].hierarchy[0].nodes.find(node => node.name === 'Grandchild').relativeDepth, 2);
     const childRoot = await queryCase(treeCase.caseDir, 'ChildA', { depth: 1 });
@@ -226,8 +280,75 @@ try {
     assert.match(renderMarkdown(topOverview), /match list is truncated by `--top`/);
     const commaMetric = await queryCase(treeCase.caseDir, 'MainMarker', { metrics: ['counter,value'] });
     assert.deepEqual(commaMetric.options.selectedMetricHeaders, ['counter,value']);
+    assert.equal(commaMetric.captures[0].metrics['counter,value'], null, 'unknown multi-row counters must stay unavailable');
     await assert.rejects(() => queryCase(treeCase.caseDir, 'MainMarker', { metrics: ['Invocations'] }), /not an exact counter header/);
     await assert.rejects(() => queryCase(treeCase.caseDir, 'MainMarker', { metrics: ['missing-counter'] }), /did not match an exported counter/);
+
+    const treeManifestPath = treeCase.manifest;
+    const treeManifestText = fs.readFileSync(treeManifestPath, 'utf8');
+    const provenanceManifest = JSON.parse(treeManifestText);
+    const provenanceGraphPath = path.join(treeCase.caseDir, provenanceManifest.captures[0].graphFile);
+    const provenanceGraphText = fs.readFileSync(provenanceGraphPath, 'utf8');
+    const provenanceRecords = provenanceGraphText.trimEnd().split(/\r?\n/).map(line => JSON.parse(line));
+    delete provenanceRecords[0].aggregation.methods[provenanceManifest.captures[0].durationHeader];
+    const missingProvenanceGraph = `${provenanceRecords.map(record => JSON.stringify(record)).join('\n')}\n`;
+    fs.writeFileSync(provenanceGraphPath, missingProvenanceGraph);
+    updateGraphDescriptor(provenanceManifest, 0, missingProvenanceGraph);
+    fs.writeFileSync(treeManifestPath, JSON.stringify(provenanceManifest, null, 2));
+    await assert.rejects(() => queryCase(treeCase.caseDir, 'MainMarker'), /missing aggregation methods/);
+    fs.writeFileSync(provenanceGraphPath, provenanceGraphText);
+    fs.writeFileSync(treeManifestPath, treeManifestText);
+
+    for (const invalidDuration of [null, -1]) {
+        const durationManifest = JSON.parse(treeManifestText);
+        const durationRecords = provenanceGraphText.trimEnd().split(/\r?\n/).map(line => JSON.parse(line));
+        durationRecords[0].metrics[durationManifest.captures[0].durationHeader] = invalidDuration;
+        const invalidDurationGraph = `${durationRecords.map(record => JSON.stringify(record)).join('\n')}\n`;
+        fs.writeFileSync(provenanceGraphPath, invalidDurationGraph);
+        updateGraphDescriptor(durationManifest, 0, invalidDurationGraph);
+        fs.writeFileSync(treeManifestPath, JSON.stringify(durationManifest, null, 2));
+        await assert.rejects(() => queryCase(treeCase.caseDir, 'MainMarker'), /invalid duration metric/);
+    }
+    fs.writeFileSync(provenanceGraphPath, provenanceGraphText);
+    fs.writeFileSync(treeManifestPath, treeManifestText);
+
+    const staleManifest = JSON.parse(treeManifestText);
+    staleManifest.schemaVersion = 2;
+    fs.writeFileSync(treeManifestPath, JSON.stringify(staleManifest, null, 2));
+    await assert.rejects(() => queryCase(treeCase.caseDir, 'MainMarker'), /Unsupported case schema 2/);
+    fs.writeFileSync(treeManifestPath, treeManifestText);
+
+    const invalidSummary = JSON.parse(treeManifestText);
+    invalidSummary.captures[0].summary.totalDurationMs = -1;
+    fs.writeFileSync(treeManifestPath, JSON.stringify(invalidSummary, null, 2));
+    await assert.rejects(() => queryCase(treeCase.caseDir, 'MainMarker'), /invalid summary/);
+    fs.writeFileSync(treeManifestPath, treeManifestText);
+
+    const invalidRootSummary = JSON.parse(treeManifestText);
+    invalidRootSummary.captures[0].summary.unmeasuredRootCount += 1;
+    fs.writeFileSync(treeManifestPath, JSON.stringify(invalidRootSummary, null, 2));
+    await assert.rejects(() => queryCase(treeCase.caseDir, 'MainMarker'), /invalid summary/);
+    fs.writeFileSync(treeManifestPath, treeManifestText);
+
+    const unnamedArtifactManifest = JSON.parse(treeManifestText);
+    delete unnamedArtifactManifest.report;
+    fs.writeFileSync(treeManifestPath, JSON.stringify(unnamedArtifactManifest, null, 2));
+    await assert.rejects(() => queryCase(treeCase.caseDir, 'MainMarker'), /exact report and guide artifact names/);
+    fs.writeFileSync(treeManifestPath, treeManifestText);
+
+    const treeManifest = JSON.parse(treeManifestText);
+    const treeGraphPath = path.join(treeCase.caseDir, treeManifest.captures[0].graphFile);
+    const treeGraphText = fs.readFileSync(treeGraphPath, 'utf8');
+    fs.writeFileSync(treeGraphPath, `${treeGraphText} `);
+    await assert.rejects(() => queryCase(treeCase.caseDir, 'MainMarker'), /artifact size does not match manifest/);
+    const blankGraphText = treeGraphText.replace('\n', '\n\n');
+    fs.writeFileSync(treeGraphPath, blankGraphText);
+    const blankManifest = JSON.parse(treeManifestText);
+    updateGraphDescriptor(blankManifest, 0, blankGraphText);
+    fs.writeFileSync(treeManifestPath, JSON.stringify(blankManifest, null, 2));
+    await assert.rejects(() => queryCase(treeCase.caseDir, 'MainMarker'), /empty NDJSON line is not allowed/);
+    fs.writeFileSync(treeGraphPath, treeGraphText);
+    fs.writeFileSync(treeManifestPath, treeManifestText);
 
     const listInput = path.join(tempRoot, 'list-input');
     fs.mkdirSync(listInput);
@@ -379,13 +500,13 @@ try {
     const onlyUnmeasured = await queryCase(unmeasuredCase.caseDir, 'RootA', { metrics: ['demo.min'] });
     assert.equal(onlyUnmeasured.captures[0].metrics['demo.min'], null);
 
-    const unweightedMeanInput = path.join(tempRoot, 'unweighted-mean-input');
-    fs.mkdirSync(unweightedMeanInput);
-    fs.writeFileSync(path.join(unweightedMeanInput, 'events.txt'), 'Mean fixture\n---\n1 | - RootA |\n2 |   - LeafA1 |\n3 |   - LeafA2 |\n4 | - RootB |\n5 |   - LeafB |\n');
-    fs.writeFileSync(path.join(unweightedMeanInput, 'counters.csv'), 'EID,demo.avg\n2,10\n3,10\n5,100\n');
-    const unweightedMeanCase = await prepare(unweightedMeanInput, path.join(tempRoot, 'unweighted-mean-output'));
-    const unweightedMean = await queryCase(unweightedMeanCase.caseDir, 'Root');
-    assert.equal(unweightedMean.captures[0].metrics['demo.avg'], 40);
+    const zeroWeightMeanInput = path.join(tempRoot, 'zero-weight-mean-input');
+    fs.mkdirSync(zeroWeightMeanInput);
+    fs.writeFileSync(path.join(zeroWeightMeanInput, 'events.txt'), 'Mean fixture\n---\n1 | - RootA |\n2 |   - LeafA1 |\n3 |   - LeafA2 |\n4 | - RootB |\n5 |   - LeafB |\n');
+    fs.writeFileSync(path.join(zeroWeightMeanInput, 'counters.csv'), 'EID,GPU Duration (ms),demo.avg\n2,0,10\n3,0,20\n5,0,100\n');
+    const zeroWeightMeanCase = await prepare(zeroWeightMeanInput, path.join(tempRoot, 'zero-weight-mean-output'));
+    const zeroWeightMean = await queryCase(zeroWeightMeanCase.caseDir, 'Root');
+    assert.equal(zeroWeightMean.captures[0].metrics['demo.avg'], null);
 
     const anomalyInput = path.join(tempRoot, 'anomaly-input');
     fs.mkdirSync(anomalyInput);

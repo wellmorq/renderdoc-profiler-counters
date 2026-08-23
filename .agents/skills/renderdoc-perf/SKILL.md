@@ -30,7 +30,7 @@ node <skill-directory>/scripts/prepare.mjs [directory] --list
 
 Use its coverage and shared-counter conflicts to choose the intended export. Matching EIDs do not prove that two CSVs came from the same replay; never merge or auto-select conflicting alternatives. If needed, copy only the intended one or two TXT+CSV pairs into a temporary input directory without deleting the sources.
 
-If the user did not ask a question, report what was discovered, validation warnings, and the clickable path to `report.html`. Stop after saying the case is ready for follow-up questions.
+If the user did not ask a question, return the clickable path to `report.html` and say the case is ready. Surface a diagnostic only when it blocks preparation or materially limits the next answer. Non-blocking diagnostics remain in `manifest.json` and `model-guide.md`; the HTML shows measurable states in context instead of repeating warning prose.
 
 ## Investigate a question
 
@@ -58,6 +58,7 @@ Answer in the user's language. Lead with the concrete workload explanation, then
 - Avoid leading with: "ROP-bound", "vertex-fetch-bound", or a stall name without explaining the work it represents.
 - Separate more work, more work per item, and less efficient execution.
 - Quantify before/after values and normalized values where the inputs support them.
+- Never replace missing duration, unknown counter semantics, an unavailable aggregate, or an unmatched baseline with a plausible numeric fallback.
 - Treat automatic event matching and correlations as evidence, not causal proof.
 - Say exactly what cannot be established from TXT+CSV. Do not infer vertex attributes, shader variants, texture count, or source-code changes unless the data contains that evidence.
 - End with two or three targeted checks that distinguish the leading explanations.

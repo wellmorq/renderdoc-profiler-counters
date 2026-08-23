@@ -62,7 +62,7 @@ An event with `counterRowCount: 0` is not measured. Its missing metric keys are 
 
 The prepared summary and focused query normalize recognized RenderDoc duration units (`s`, `ms`, `µs`/`us`, `ns`) to milliseconds. The raw duration counter stored in NDJSON keeps the CSV unit; apply `durationToMs` when inspecting it directly.
 
-For generated parent markers, `.avg`, `.pct`, and `.ratio` values are duration-weighted estimates across descendant actions. They are useful summaries, but they are not exact marker-wide recomputations. A true aggregate hit rate, stall percentage, or similar ratio requires the metric's numerator and denominator; otherwise inspect the descendant range and describe the marker value as an estimate.
+For generated parent markers, `.avg`, `.pct`, and `.ratio` values are duration-weighted estimates across descendant actions. If no positive duration weights exist, the aggregate is unavailable; it is not replaced with an arithmetic mean. Counters whose aggregation semantics are unknown are also unavailable on multi-row parents instead of being silently summed. These estimates are useful summaries, but they are not exact marker-wide recomputations. A true aggregate hit rate, stall percentage, or similar ratio requires the metric's numerator and denominator; otherwise inspect the descendant range and describe the marker value as an estimate.
 
 ## Finish with discriminating checks
 

@@ -3,8 +3,23 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const TOOL_VERSION = '1.1.0';
-const SCHEMA_VERSION = 2;
+const TOOL_VERSION = '1.2.0';
+const SCHEMA_VERSION = 3;
+const METRICS_ENCODING = 'sparse-zero-omitted';
+const KNOWN_ADDITIVE_COUNTERS = new Set([
+    'Input Vertices Read',
+    'Input Primitives',
+    'GS Primitives',
+    'Rasterizer Invocations',
+    'Rasterized Primitives',
+    'Samples Passed',
+    'VS Invocations',
+    'HS Invocations',
+    'DS Invocations',
+    'GS Invocations',
+    'PS Invocations',
+    'CS Invocations'
+]);
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const SKILL_DIR = path.resolve(SCRIPT_DIR, '..');
 const TEMPLATE_PATH = path.join(SKILL_DIR, 'assets', 'report-template.html');
@@ -72,25 +87,26 @@ function parseCsv(text) {
 
 function detectCounterKind(header) {
     const value = String(header || '').toLowerCase();
+    if (durationScaleToMs(header) !== null || KNOWN_ADDITIVE_COUNTERS.has(String(header || '').trim())) return 'sum';
     if (value.includes('.sum')) return 'sum';
     if (value.includes('.max')) return 'max';
     if (value.includes('.min')) return 'min';
     if (value.includes('.avg') || value.includes('.pct') || value.includes('.ratio')) return 'mean';
     if (value.includes('(%)') || value.includes('hit_rate') || value.includes('hit rate') || value.includes('per_warp_active')) return 'mean';
-    return 'sum';
+    return 'unknown';
 }
 
-function findDurationHeader(headers) {
-    const exact = ['GPU Duration (ms)', 'GPU Duration', 'Duration (ms)'];
-    for (const candidate of exact) {
-        const found = headers.find(header => header === candidate);
-        if (found) return found;
+function findDurationHeader(headers, fileName = 'CSV') {
+    const matches = headers.filter(header => durationScaleToMs(header) !== null);
+    if (matches.length !== 1) {
+        const found = matches.length ? matches.join(', ') : 'none';
+        throw new Error(`${fileName}: CSV must contain exactly one GPU/Duration counter with an explicit supported unit (s, ms, us, µs, ns); found ${found}`);
     }
-    return headers.find(header => durationScaleToMs(header) !== null) || null;
+    return matches[0];
 }
 
 function durationScaleToMs(header) {
-    const match = String(header || '').trim().match(/^(?:GPU )?Duration(?:\s*\((s|ms|us|µs|μs|ns)\))?$/i);
+    const match = String(header || '').trim().match(/^(?:GPU )?Duration\s*\((s|ms|us|µs|μs|ns)\)$/i);
     if (!match) return null;
     const unit = (match[1] || 'ms').toLowerCase().replace(/[µμ]/g, 'u');
     if (unit === 's') return 1000;
@@ -98,13 +114,6 @@ function durationScaleToMs(header) {
     if (unit === 'us') return 0.001;
     if (unit === 'ns') return 0.000001;
     return null;
-}
-
-function findTimeWeightHeader(headers) {
-    return findDurationHeader(headers)
-        || headers.find(header => header === 'gpu__time_duration.sum')
-        || headers.find(header => /gpu__time_duration/i.test(header))
-        || null;
 }
 
 function parseCounters(text, fileName) {
@@ -117,6 +126,7 @@ function parseCounters(text, fileName) {
 
     const headers = allHeaders.filter((_, index) => index !== eidIndex);
     if (headers.length === 0 || headers.some(header => !header)) throw new Error(`${fileName}: CSV contains an empty counter name`);
+    const durationHeader = findDurationHeader(headers, fileName);
     const counters = new Map();
 
     for (let i = 1; i < rows.length; i++) {
@@ -136,20 +146,20 @@ function parseCounters(text, fileName) {
             if (normalized === '') throw new Error(`${fileName}: row ${i + 1}, ${header}: empty counter value`);
             const number = Number(normalized);
             if (!Number.isFinite(number)) throw new Error(`${fileName}: row ${i + 1}, ${header}: expected a number`);
+            if (header === durationHeader && number < 0) throw new Error(`${fileName}: row ${i + 1}, ${header}: duration must be non-negative`);
             metrics[header] = number;
         });
         counters.set(eid, metrics);
     }
 
     if (counters.size === 0) throw new Error(`${fileName}: CSV has no valid counter rows`);
-    const durationHeader = findDurationHeader(headers);
     return {
         headers,
         counters,
         counterKinds: Object.fromEntries(headers.map(header => [header, detectCounterKind(header)])),
         durationHeader,
-        durationToMs: durationHeader ? durationScaleToMs(durationHeader) : null,
-        weightHeader: findTimeWeightHeader(headers)
+        durationToMs: durationScaleToMs(durationHeader),
+        weightHeader: durationHeader
     };
 }
 
@@ -335,22 +345,36 @@ function labelPair(eventsFile, countersFile, index, pairCount) {
     return pairCount === 1 ? 'capture' : (index === 0 ? 'a' : 'b');
 }
 
-function aggregateRows(rows, headers, kinds, weightHeader) {
+function aggregateRowsDetailed(rows, headers, kinds, weightHeader, aggregate = rows.length > 1) {
     const result = {};
+    const methods = {};
     for (const header of headers) {
         const values = rows.map(metrics => metrics[header]).filter(Number.isFinite);
+        if (kinds[header] === 'unknown') {
+            result[header] = aggregate && values.length > 1 ? null : (values.length ? values[0] : null);
+            methods[header] = aggregate && values.length > 1 ? 'unavailable-unknown-kind' : 'raw-self';
+            continue;
+        }
         if (kinds[header] === 'max') {
-            result[header] = values.length ? values.reduce((maximum, value) => Math.max(maximum, value), -Infinity) : 0;
+            result[header] = values.length ? values.reduce((maximum, value) => Math.max(maximum, value), -Infinity) : null;
+            methods[header] = aggregate ? 'max' : 'raw-self';
             continue;
         }
         if (kinds[header] === 'min') {
-            result[header] = values.length ? values.reduce((minimum, value) => Math.min(minimum, value), Infinity) : 0;
+            result[header] = values.length ? values.reduce((minimum, value) => Math.min(minimum, value), Infinity) : null;
+            methods[header] = aggregate ? 'min' : 'raw-self';
+            continue;
+        }
+        if (!aggregate || values.length === 1) {
+            result[header] = values.length ? values[0] : null;
+            methods[header] = 'raw-self';
             continue;
         }
         let sum = 0;
         let count = 0;
         let weighted = 0;
         let weightSum = 0;
+        let weightedCount = 0;
         for (const metrics of rows) {
             const value = metrics[header];
             if (!Number.isFinite(value)) continue;
@@ -360,12 +384,24 @@ function aggregateRows(rows, headers, kinds, weightHeader) {
             if (Number.isFinite(weight) && weight > 0) {
                 weighted += value * weight;
                 weightSum += weight;
+                weightedCount++;
             }
         }
-        if (kinds[header] === 'mean') result[header] = weightSum > 0 ? weighted / weightSum : (count ? sum / count : 0);
-        else result[header] = sum;
+        if (kinds[header] === 'mean') {
+            result[header] = weightSum > 0 ? weighted / weightSum : null;
+            methods[header] = weightSum > 0
+                ? `duration-weighted${weightedCount === count ? '' : '-partial'}`
+                : 'unavailable-no-positive-duration';
+        } else {
+            result[header] = sum;
+            methods[header] = 'sum';
+        }
     }
-    return result;
+    return { metrics: result, methods };
+}
+
+function aggregateRows(rows, headers, kinds, weightHeader, aggregate = rows.length > 1) {
+    return aggregateRowsDetailed(rows, headers, kinds, weightHeader, aggregate).metrics;
 }
 
 function prepareCapture(label, eventsSource, countersSource) {
@@ -388,10 +424,11 @@ function prepareCapture(label, eventsSource, countersSource) {
         });
         const ownMetrics = counterData.counters.get(node.eid) || null;
         const rows = node.children.length ? descendantRows : (ownMetrics ? [ownMetrics] : []);
-        const effectiveRows = rows.length ? rows : (ownMetrics ? [ownMetrics] : []);
-        const metrics = effectiveRows.length
-            ? aggregateRows(effectiveRows, counterData.headers, counterData.counterKinds, counterData.weightHeader)
-            : {};
+        const effectiveRows = rows;
+        const aggregateDetails = effectiveRows.length
+            ? aggregateRowsDetailed(effectiveRows, counterData.headers, counterData.counterKinds, counterData.weightHeader, node.children.length > 0)
+            : { metrics: {}, methods: {} };
+        const metrics = aggregateDetails.metrics;
         const compactMetrics = Object.fromEntries(Object.entries(metrics).filter(([, value]) => value !== 0));
         records.push({
             eid: node.eid,
@@ -406,6 +443,11 @@ function prepareCapture(label, eventsSource, countersSource) {
             scope: node.children.length ? 'descendants' : 'self',
             counterRowCount: effectiveRows.length,
             metrics: compactMetrics,
+            aggregation: !effectiveRows.length
+                ? { source: 'unavailable', rowCount: 0, method: 'unavailable-no-rows' }
+                : node.children.length
+                    ? { source: 'descendant-rows', rowCount: effectiveRows.length, methods: aggregateDetails.methods }
+                    : { source: 'self-row', rowCount: 1, method: 'raw-self' },
             selfMetrics: node.children.length && ownMetrics ? ownMetrics : undefined
         });
         return effectiveRows;
@@ -419,7 +461,7 @@ function prepareCapture(label, eventsSource, countersSource) {
     const rootRecords = records.filter(record => rootKeys.has(record.stableKey));
     const measuredRootRecords = rootRecords.filter(record => record.counterRowCount > 0);
     const totalDurationMs = durationHeader && measuredRootRecords.length
-        ? measuredRootRecords.reduce((sum, record) => sum + (record.metrics[durationHeader] || 0), 0) * durationToMs
+        ? measuredRootRecords.reduce((sum, record) => sum + (Number.isFinite(record.metrics[durationHeader]) ? record.metrics[durationHeader] : 0), 0) * durationToMs
         : null;
 
     return {
@@ -445,7 +487,9 @@ function prepareCapture(label, eventsSource, countersSource) {
             missingLeafCount: missingLeafEids.length,
             unmatchedCounterCount: unmatchedCounterEids.length,
             metricCount: counterData.headers.length,
-            totalDurationMs
+            totalDurationMs,
+            meanUnavailableCount: records.reduce((count, record) => count + Object.entries(record.aggregation?.methods || {}).filter(([header, method]) => counterData.counterKinds[header] === 'mean' && String(method).startsWith('unavailable')).length, 0),
+            unknownAggregateCount: records.reduce((count, record) => count + Object.entries(record.aggregation?.methods || {}).filter(([header, method]) => counterData.counterKinds[header] === 'unknown' && String(method).startsWith('unavailable')).length, 0)
         },
         missingLeafEids,
         unmatchedCounterEids
@@ -490,8 +534,8 @@ function renderGuide(targetDir, caseDir, captures, warnings) {
         `Case directory: ${caseDir}`,
         '',
         'The generated NDJSON files are the searchable event graph. Each line contains one event or marker, its full path, aggregation scope, counters, and provenance.',
-        'Metric objects use sparse-zero encoding only for measured records: when counterRowCount is positive, a missing metric key listed in the capture headers means numeric zero. When counterRowCount is zero, the record was not measured and all of its metric values are unavailable. A counter absent from the headers was not exported.',
-        'For parent markers, .avg/.pct values are duration-weighted estimates across descendant counter rows, not exact recomputed marker-wide ratios. Exact ratios require their numerator and denominator counters; inspect leaf rows and ranges when that distinction matters.',
+        'Metric objects use sparse-zero encoding only for measured records: when counterRowCount is positive, a missing metric key listed in the capture headers means numeric zero. An explicit null means that the counter could not be aggregated. When counterRowCount is zero, the record was not measured and all of its metric values are unavailable. A counter absent from the headers was not exported.',
+        'For parent markers, .avg/.pct/.ratio values are raw for one contributing row and duration-weighted estimates across multiple descendant rows. If no positive duration weight exists, the value is unavailable; there is no arithmetic or counter-row fallback. Exact ratios require their numerator and denominator counters; inspect leaf rows and ranges when that distinction matters.',
         ''
     ];
     captures.forEach(capture => {
@@ -500,7 +544,9 @@ function renderGuide(targetDir, caseDir, captures, warnings) {
         lines.push(`- Counter rows: ${capture.summary.counterRowCount}`);
         lines.push(`- Metrics: ${capture.summary.metricCount}`);
         if (Number.isFinite(capture.summary.totalDurationMs)) lines.push(`- Measured-root GPU duration: ${capture.summary.totalDurationMs.toFixed(3)} ms`);
-        lines.push(`- Sources: ${capture.eventsFile}, ${capture.countersFile}`, '');
+        lines.push(`- Sources: ${capture.eventsFile}, ${capture.countersFile}`);
+        lines.push(`- GPU Duration: ${capture.durationHeader} -> ${capture.durationToMs} ms/unit`);
+        lines.push(`- Mean aggregation: one row raw; multiple rows duration-weighted; no positive duration means unavailable`, '');
     });
     if (warnings.length) {
         lines.push('## Warnings', '');
@@ -772,7 +818,9 @@ async function canReuseCase(reportPath, manifestPath, guidePath, fingerprint) {
     try {
         const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8'));
         if (manifest.fingerprint !== fingerprint || manifest.schemaVersion !== SCHEMA_VERSION) return false;
-        if (!Array.isArray(manifest.captures) || !manifest.captures.length) return false;
+        if (manifest.metricsEncoding !== METRICS_ENCODING || manifest.metricAvailability !== 'counterRowCount-zero-means-unmeasured') return false;
+        if (manifest.report !== path.basename(reportPath) || manifest.guide !== path.basename(guidePath)) return false;
+        if (!Array.isArray(manifest.captures) || manifest.captures.length < 1 || manifest.captures.length > 2) return false;
         const caseDir = path.dirname(manifestPath);
         const graphs = manifest.artifacts?.graphs;
         if (!Array.isArray(graphs) || graphs.length !== manifest.captures.length) return false;
@@ -781,6 +829,19 @@ async function canReuseCase(reportPath, manifestPath, guidePath, fingerprint) {
         for (let index = 0; index < manifest.captures.length; index++) {
             const capture = manifest.captures[index];
             const graph = graphs[index];
+            if (!capture || !Array.isArray(capture.headers) || !capture.headers.length || new Set(capture.headers).size !== capture.headers.length) return false;
+            const summary = capture.summary;
+            const validRootSummary = Number.isInteger(summary?.rootCount) && summary.rootCount >= 1
+                && Number.isInteger(summary.measuredRootCount) && summary.measuredRootCount >= 0
+                && Number.isInteger(summary.unmeasuredRootCount) && summary.unmeasuredRootCount >= 0
+                && summary.measuredRootCount + summary.unmeasuredRootCount === summary.rootCount;
+            const validTotal = summary?.measuredRootCount === 0
+                ? summary.totalDurationMs === null
+                : Number.isFinite(summary?.totalDurationMs) && summary.totalDurationMs >= 0;
+            if (!Number.isInteger(summary?.eventCount) || summary.eventCount < 1 || !validRootSummary || !Number.isInteger(summary.counterRowCount) || summary.counterRowCount < 0 || !Number.isInteger(summary.missingLeafCount) || summary.missingLeafCount < 0 || summary.metricCount !== capture.headers.length || !validTotal) return false;
+            if (capture.durationHeader !== findDurationHeader(capture.headers) || capture.durationToMs !== durationScaleToMs(capture.durationHeader) || capture.weightHeader !== capture.durationHeader) return false;
+            if (!capture.counterKinds || capture.headers.some(header => !['sum', 'max', 'min', 'mean', 'unknown'].includes(capture.counterKinds[header]))) return false;
+            if (capture.counterKinds[capture.durationHeader] !== 'sum') return false;
             if (graph.file !== capture.graphFile || graph.recordCount !== capture.summary?.eventCount) return false;
             if (!await artifactMatches(caseDir, graph, capture.graphFile)) return false;
         }
@@ -823,20 +884,22 @@ export async function prepare(targetDir, outputDir = null) {
         return rank(a.label) - rank(b.label) || a.label.localeCompare(b.label);
     });
     const labelCounts = new Map();
-    captures.forEach((capture, index) => {
+    captures.forEach(capture => {
         const baseLabel = capture.label;
         const occurrence = (labelCounts.get(baseLabel) || 0) + 1;
         labelCounts.set(baseLabel, occurrence);
-        if (occurrence > 1) {
-            capture.label = `${baseLabel}-${occurrence}`;
-            warnings.push(`Duplicate capture label "${baseLabel}" was renamed to "${capture.label}". Use distinct filename tokens to make comparison labels explicit.`);
-        }
-        capture.fileLabel = safeLabel(capture.label, index);
     });
+    const duplicateLabels = [...labelCounts.entries()].filter(([, count]) => count > 1).map(([label]) => label);
+    if (duplicateLabels.length) {
+        throw new Error(`Duplicate capture labels: ${duplicateLabels.join(', ')}. Rename before/after files so each capture has a distinct label before preparing a comparison.`);
+    }
+    captures.forEach((capture, index) => { capture.fileLabel = safeLabel(capture.label, index); });
 
     captures.forEach(capture => {
         if (capture.summary.missingLeafCount) warnings.push(`${capture.label}: ${capture.summary.missingLeafCount} leaf events have no counter row.`);
         if (capture.summary.unmatchedCounterCount) warnings.push(`${capture.label}: ${capture.summary.unmatchedCounterCount} counter rows do not match an exported event EID.`);
+        if (capture.summary.meanUnavailableCount) warnings.push(`${capture.label}: ${capture.summary.meanUnavailableCount} mean counter aggregates are unavailable because multiple rows have no positive GPU-duration weight; no arithmetic fallback was used.`);
+        if (capture.summary.unknownAggregateCount) warnings.push(`${capture.label}: ${capture.summary.unknownAggregateCount} unknown counter aggregates are unavailable; unknown counters are not summed across descendants.`);
         if (capture.anomalies.length) {
             const count = capture.anomalies.reduce((sum, anomaly) => sum + anomaly.count, 0);
             const example = capture.anomalies[0];
@@ -892,6 +955,7 @@ export async function prepare(targetDir, outputDir = null) {
     });
     const reportData = {
         schemaVersion: SCHEMA_VERSION,
+        metricsEncoding: METRICS_ENCODING,
         fingerprint,
         generatedAt: new Date().toISOString(),
         sourceDirectory: targetDir,
@@ -919,7 +983,7 @@ export async function prepare(targetDir, outputDir = null) {
     const manifest = {
         schemaVersion: SCHEMA_VERSION,
         toolVersion: TOOL_VERSION,
-        metricsEncoding: 'sparse-zero-omitted',
+        metricsEncoding: METRICS_ENCODING,
         metricAvailability: 'counterRowCount-zero-means-unmeasured',
         fingerprint,
         generatedAt: reportData.generatedAt,
