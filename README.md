@@ -11,10 +11,10 @@ Primary target: Windows + Unity (D3D11/D3D12/Vulkan captures, URP/HDRP/built-in 
 Give your coding agent (Codex, OpenCode, …) this repository URL and ask it to install the skill. The agent should:
 
 1. Clone the repository and copy `.agents/skills/renderdoc-gpu` into the skills directory it reads (project or user level, e.g. `<project>/.agents/skills/` or `~/.agents/skills/`).
-2. Run `node <skills dir>/renderdoc-gpu/scripts/rdgpu.mjs install` — **this builds RenderDoc's Python module locally** through `rdc setup-renderdoc`: it needs git and a C++ toolchain (Windows: Visual Studio Build Tools with "Desktop development with C++") and takes 10–40 minutes. It installs uv and rdc-cli on the way and reports `[NEED USER]` for anything a person must do (admin prompt for Build Tools, NVIDIA login for the Nsight Perf SDK download).
+2. Run `node <skills dir>/renderdoc-gpu/scripts/rdgpu.mjs install`. Without Node.js 18+ run the bootstrap instead — it puts a portable Node into the user profile (no admin) and then runs `install`: Windows `powershell -NoProfile -ExecutionPolicy Bypass -File <skills dir>\renderdoc-gpu\scripts\bootstrap.ps1`, Linux/macOS `sh <skills dir>/renderdoc-gpu/scripts/bootstrap.sh`. `install` — **this builds RenderDoc's Python module locally** through `rdc setup-renderdoc`: it needs git and a C++ toolchain (Windows: Visual Studio Build Tools with "Desktop development with C++") and takes 10–40 minutes. It installs uv and rdc-cli on the way and reports `[NEED USER]` for anything a person must do (admin prompt for Build Tools, NVIDIA login for the Nsight Perf SDK download).
 3. Run `node …/rdgpu.mjs doctor --capture <some .rdc>` and confirm `STATUS: ready`.
 
-Requirements: Node.js 18+, git, a C++ toolchain, network access to github.com and PyPI during install. Optional: the Nsight Perf SDK for NVIDIA hardware counters (`setup-nvperf` copies it into RenderDoc's plugin folder once downloaded). Without the rdc build the CLI falls back to an installed RenderDoc (`qrenderdoc --python`) with fewer features.
+Requirements: Node.js 18+ (installed by the bootstrap if missing), git, a C++ toolchain, network access to github.com and PyPI during install. Optional: the Nsight Perf SDK for NVIDIA hardware counters (`setup-nvperf` copies it into RenderDoc's plugin folder once downloaded). Without the rdc build the CLI falls back to an installed RenderDoc (`qrenderdoc --python`) with fewer features.
 
 ## Use it directly
 
@@ -33,6 +33,7 @@ node .agents/skills/renderdoc-gpu/scripts/rdgpu.mjs experiment frame.rdc 575 --v
 | path | what |
 |---|---|
 | `.agents/skills/renderdoc-gpu/` | the skill (SKILL.md, CLI in `scripts/`, references) |
+| `scripts/bootstrap.ps1`, `scripts/bootstrap.sh` | first run without Node.js 18+: portable Node in the user profile (no admin), then `install` |
 | `scripts/rdjob.py` | runs inside RenderDoc's Python (3.6-compatible): extraction, counters, state, shaders, experiments |
 | `scripts/lib/*.mjs` | install, rdc-cli backend, host discovery, job runner, cache model, queries, compare, find-source, Nsight Perf setup |
 | `tests/rdgpu.test.mjs` | `node --test tests/rdgpu.test.mjs` (offline); set `RDGPU_TEST_CAPTURE=<.rdc>` to also run a live replay test |

@@ -12,6 +12,7 @@ Every live step runs `scripts/rdjob.py` inside RenderDoc's Python API. Three hos
 
 ## `install` — what it does (run by the agent)
 
+0. (Only when Node.js 18+ is missing.) `scripts/bootstrap.ps1` (Windows, run with `powershell -NoProfile -ExecutionPolicy Bypass -File …`) or `scripts/bootstrap.sh` downloads the current Node.js LTS from nodejs.org, checks it against the release's SHASUMS256.txt and unpacks it to `%LOCALAPPDATA%\rdgpu\node` (`~/.local/share/rdgpu/node`). Nothing is added to PATH and no admin rights are needed; it prints the full `node` path to use, then runs `install`. An older system Node is left alone (the portable copy is used instead). Behind a proxy that blocks nodejs.org, install Node.js LTS another way (`winget install OpenJS.NodeJS.LTS`, needs an admin prompt) and run `install` directly.
 1. Checks Node 18+ and git.
 2. C++ toolchain: Windows → Visual Studio Build Tools with the C++ workload (detected with vswhere). Missing → `[NEED USER]` with the command for the user (admin/UAC):
    `winget install --id Microsoft.VisualStudio.2022.BuildTools -e --override "--passive --wait --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"`. Linux → cmake, ninja, g++, bison, autotools, X11/GL dev packages.
