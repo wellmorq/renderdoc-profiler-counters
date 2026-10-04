@@ -126,7 +126,7 @@ export function compare(A, B, marker, opts = {}) {
     if (!same) continue;
     const evB = B.workUnder(r.y.a).filter((e) => e.kind === 'draw' || e.kind === 'dispatch').sort((p, q) => (B.ms(q.eid) || 0) - (B.ms(p.eid) || 0))[0];
     const evA = evB && A.workUnder(r.x.a).find((e) => e.name === evB.name && e.eid === evB.eid) ? evB.eid : null;
-    if (evB && !hints.some((h) => h.includes(`@${evB.eid}`))) hints.push(`  ${trunc(r.k.split(SEP).pop(), 50)}: same work, ${fmtDelta(r.sa.ms, r.sb.ms)} time -> drawdiff <A> <B> ${evA ?? '<eid in A>'} ${evB.eid}   (heaviest event @${evB.eid})`);
+    if (evB && !hints.some((h) => h.includes(`@${evB.eid}`))) hints.push(`  ${trunc(r.k.split(SEP).pop(), 50)}: same work, ${fmtDelta(r.sa.ms, r.sb.ms)} time -> drawdiff <A> <B> ${evA ?? `<eid in A> ${evB.eid}`}   (heaviest event @${evB.eid})`);
     if (hints.length >= 4) break;
   }
   if (hints.length) out.push('', 'SAME WORK COUNTERS, DIFFERENT COST — per-item cost changed (constants such as loop counts, textures, state) or timing noise. Check the heaviest event (live):', ...hints,

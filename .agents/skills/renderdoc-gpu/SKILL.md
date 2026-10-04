@@ -16,7 +16,7 @@ S session <file.rdc>               # optional: keep the .rdc loaded in a backgro
 ```
 The `.rdc` is the only input and the source of truth. The cache (`%LOCALAPPDATA%\rdgpu\cache`, Linux `~/.cache/rdgpu`) is derived from it, rebuilt automatically when the file changes, and holds the shader dumps/edits/images you create. Every command takes the `.rdc` path. Run `S` without arguments for the full command list. Read command output; don't open cache JSON files unless a command lacks something.
 
-Each live command loads the capture (seconds for small captures, up to a minute for big Unity ones). When you will run several live commands on the same capture (`draw`, `drawdiff`, `source`, `experiment`, `fetch`), start `S session <file.rdc>` first: those commands then reuse the loaded capture automatically. It exits by itself after 15 min idle (`--idle <sec>`), or `S session <file.rdc> --stop`.
+Each live command loads the capture (seconds for small captures, up to a minute for big Unity ones). When you will run several live commands on the same capture (`draw`, `drawdiff`, `source`, `experiment`, `fetch`), start `S session <file.rdc>` first: those commands then reuse the loaded capture automatically. It exits by itself after 15 min idle (`--idle <sec>`), or `S session <file.rdc> --stop`. Sessions are per capture; several can run at once (e.g. before and after).
 
 Results go to stdout, RenderDoc progress to stderr — don't merge them (`2>&1`) when you save or diff output; add `-q` to silence progress. Live commands take seconds; `experiment` can take minutes (≈ (variants + 2) × `--repeat` replays): give it a long timeout or run it in the background.
 
@@ -59,7 +59,7 @@ Names: markers come from the engine (Unity: `RenderLoop.Draw`, `DrawOpaqueObject
 - Explain cost in three layers: **more work** (draws, vertices, pixels = `ps`, threads), **more work per item** (instructions, texture fetches, bytes per item), **less efficient execution** (cache hit rates, stalls). Lead with the work explanation in plain words; stall names come last. Method and NVIDIA counter meanings: [references/analysis-method.md](references/analysis-method.md), [references/counters.md](references/counters.md).
 - `ps / viewport pixels` from `event` ≈ how many times each screen pixel was shaded by that draw (overdraw/coverage). Fullscreen passes ≈ 1.0. `MICRO-TRIANGLES` (<1 shaded pixel per triangle) means the cost is geometry density, not the pixel shader — don't read `ns per ps invocation` as shader cost then.
 - `tree` footer for a marker: draw-time percentiles and how much time goes to draws that produce **0 pixels** (occluded/off-screen work) — a common Unity finding (missing occlusion culling, duplicate depth prepass).
-- `WARNING replay GPU is a SOFTWARE rasterizer` (or `DEGRADED`): relative numbers only; clears and texture-heavy events are distorted. Say so in the answer.
+- `WARNING replay GPU is a SOFTWARE rasterizer` (or `DEGRADED`): relative numbers only; clears and texture-heavy events are distorted. Say so in the answer. Between two such captures, treat a per-event time change as real only when `drawdiff` (or work counters / shader code) shows a matching difference; otherwise call it noise.
 - `summary` prints FINDINGS — heuristic leads (dominant draw, micro-triangles, 0-pixel draws, overdraw, expensive fullscreen passes, `/Od` shaders, software-replay artifacts). Verify each before reporting it; if the user asks for "top N" and fewer real problems exist, give fewer and say why — never pad the list with artifacts.
 - Repeats: `--repeat N` on `open`/`fetch`/`experiment` stores min–max; `event` shows the range. When ranges of two things overlap, the difference is not proven.
 
@@ -68,6 +68,7 @@ Names: markers come from the engine (Unity: `RenderLoop.Draw`, `DrawOpaqueObject
 - `shader <rdc> <id>` shows whether the capture embeds source and where the disassembly is; `shader <rdc> <id> --src --grep <regex>` prints matching lines of the source (or disassembly) with line numbers — prefer grep over printing whole files.
 - No embedded source (normal for Unity release shaders): use `find-source <rdc> <id> --project <unity project root>`; it ranks project/package shader files by the shader's cbuffer, texture and entry names. Ask the user for the project path if you don't know it (see §6). Unity pragmas to embed source and the `/Od` caveat: [references/unity-shaders.md](references/unity-shaders.md).
 - When you quote code, say whether it is from the embedded source, a project file match (probable), or disassembly. Embedded source is the compiled language of the capture (HLSL for D3D, GLSL/SPIR-V for GL/Vulkan) and already preprocessed; map changes back to the project `.shader`/`.hlsl` yourself.
+- Experiments run in the capture's own shader language. On a GL/Vulkan capture your tested edit is GLSL; a port to the project's HLSL is untested — say so.
 - A match under `Library/PackageCache/` (URP/HDRP) is read-only: propose the change in a copy (embedded package in `Packages/` or a custom shader in `Assets/`), never in the cache.
 
 ## 5. Output contract

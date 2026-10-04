@@ -267,5 +267,5 @@ test('live: open + draw + experiment on a real capture', { skip: !LIVE, timeout:
   assert.equal(r.code, 0, r.err);
   assert.match(r.err, /in the open session/);
   r = cli(['session', cap, '--stop']);
-  assert.match(r.out, /stopping/);
+  assert.match(r.out, /session stop/);
 });

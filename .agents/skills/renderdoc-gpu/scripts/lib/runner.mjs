@@ -40,7 +40,7 @@ export async function runJob(jobDir, job, opts = {}) {
   const jobFile = path.join(jobDir, 'job.json');
   fs.writeFileSync(jobFile, JSON.stringify(full, null, 1));
 
-  if (opts.sessionDir && !opts.noSession) {
+  if (opts.sessionDir && !opts.noSession && !fs.existsSync(path.join(opts.sessionDir, 'stop'))) {
     const alive = sessionAlive(opts.sessionDir, job.capture);
     if (alive) return runInSession(opts.sessionDir, jobFile, full, opts);
   }

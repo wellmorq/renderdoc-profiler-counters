@@ -1073,6 +1073,7 @@ def compare_texels(ctx, tid, ref, data):
     n, scale, step = ra["n"], ra["scale"], ra["step"]
     va, vb = ra["vals"], rb["vals"]
     changed = 0
+    visible = 0
     checked = 0
     maxabs = 0.0
     sumabs = 0.0
@@ -1080,6 +1081,7 @@ def compare_texels(ctx, tid, ref, data):
     peak = 0.0
     for t in range(0, ra["texels"], step):
         diff = False
+        tmax = 0.0
         o = t * n
         for k in range(n):
             x = va[o + k] / scale
@@ -1087,6 +1089,8 @@ def compare_texels(ctx, tid, ref, data):
             if x != x or y != y:
                 continue
             d = abs(x - y)
+            if d > tmax:
+                tmax = d
             if d > 0:
                 diff = True
                 if d > maxabs:
@@ -1098,11 +1102,14 @@ def compare_texels(ctx, tid, ref, data):
         checked += 1
         if diff:
             changed += 1
+        if tmax > 1.0 / 255:
+            visible += 1
     import math
     nvals = max(1, checked * n)
     mse = sumsq / nvals
     peak = max(peak, 1.0)
     res = {"target": tid, "changedPct": round(100.0 * changed / max(1, checked), 3),
+           "visiblePct": round(100.0 * visible / max(1, checked), 3),
            "maxAbs": round(maxabs, 6), "meanAbs": round(sumabs / nvals, 7),
            "psnr": round(10 * math.log10(peak * peak / mse), 1) if mse > 0 else None,
            "peak": round(peak, 4)}

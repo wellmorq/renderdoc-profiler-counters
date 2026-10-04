@@ -250,7 +250,7 @@ export async function experiment(c, eid, opts) {
     const sig = v === base ? '' : (overlaps(p, pe(base, eid)) ? 'no (ranges overlap)' : 'yes');
     const o = v.output || {};
     const img = o.error ? 'n/a' : o.changedPct === undefined || o.changedPct === null ? '-'
-      : `${o.changedPct}%${o.maxAbs !== undefined && o.changedPct > 0 ? ` max ${o.maxAbs} mean ${o.meanAbs}${o.psnr ? ` psnr ${o.psnr}dB` : ''}` : ''}`;
+      : `${o.changedPct}%${o.visiblePct !== undefined && o.changedPct > 0 ? ` (>1/255: ${o.visiblePct}%)` : ''}${o.maxAbs !== undefined && o.changedPct > 0 ? ` max ${o.maxAbs} mean ${o.meanAbs}${o.psnr ? ` psnr ${o.psnr}dB` : ''}` : ''}`;
     return [v.label, p ? `${fmtMs(p.median)} [${fmtMs(p.min)}–${fmtMs(p.max)}]` : '-', fmtMs(m.targetSum),
       v === base ? '' : d(baseM?.targetSum, m.targetSum), sig, img, v.image ? path.basename(v.image) : ''];
   });
@@ -267,7 +267,7 @@ export async function experiment(c, eid, opts) {
   const fl = r.variants.find((v) => v.flags)?.flags?.find((x) => x[0] === '@cmdline');
   if (fl) out.push(`variants compiled with: ${fl[1]}`);
   out.push('Judge variants against "original" (same compiler + flags). significant=yes: min–max ranges do not overlap. If they overlap, rerun with a higher --repeat.');
-  out.push('image vs captured: % of render-target-0 texels that differ after this event, max/mean absolute error per channel (float, linear) and PSNR. 0% = identical.');
+  out.push('image vs captured: % of render-target-0 texels that differ after this event (and % differing by more than 1/255 — the visible part), max/mean absolute error per channel (float, linear) and PSNR. 0% = identical. Only the first event\'s target is compared.');
   if (imgDir) out.push(`images: ${imgDir}`);
   out.push(`raw json: ${path.join(dir, 'experiment.json')}`);
   return out.join('\n');
@@ -285,7 +285,16 @@ export async function usage(c, resId, opts) {
 
 export async function session(c, opts) {
   const sdir = path.join(c.dir, 'session');
-  if (opts.stop) return stopSession(sdir) ? 'session stopping (finishes the running job first)' : 'no session running';
+  if (opts.stop) {
+    if (!stopSession(sdir)) return 'no session running';
+    const until = Date.now() + 15000;
+    while (Date.now() < until && sessionAlive(sdir)) await new Promise((r) => setTimeout(r, 200));
+    return sessionAlive(sdir) ? 'session stopping after its running job finishes (new live commands load the capture themselves meanwhile)' : 'session stopped';
+  }
+  if (fs.existsSync(path.join(sdir, 'stop'))) {
+    const until = Date.now() + 15000;
+    while (Date.now() < until && sessionAlive(sdir)) await new Promise((r) => setTimeout(r, 200));
+  }
   const a = sessionAlive(sdir, c.meta.capture);
   if (a) return `session already running (pid ${a.pid}, ${a.served} job(s) served, idle timeout ${a.idle}s)`;
   const t0 = Date.now();
