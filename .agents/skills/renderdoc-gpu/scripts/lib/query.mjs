@@ -1,7 +1,7 @@
 // Offline queries over a prepared case. Output is compact text meant for an agent's context.
 import fs from 'node:fs';
 import path from 'node:path';
-import { GENERIC_HELP, WORK_KINDS, counterKind, shortMetric } from './case.mjs';
+import { DERIVED_HELP, GENERIC_HELP, WORK_KINDS, counterKind, shortMetric } from './case.mjs';
 import { bar, fmtMs, fmtNum, fmtPct, table, trunc } from './format.mjs';
 import { isDebugCompiled, shaderStats, statsLabel } from './shaderstats.mjs';
 
@@ -338,7 +338,7 @@ export function event(c, eid) {
     out.push(`GPU: ${fmtMs(ms)} ms${sp ? ` [${fmtMs(sp[0])}–${fmtMs(sp[1])} over repeats]` : ''}${frame ? ` (${fmtPct((ms / frame) * 100)} of frame)` : ''}`);
     const gen = Object.keys(GENERIC_HELP).filter((k) => k !== 'ms' && v[k] !== undefined && v[k] !== 0).map((k) => `${k}=${fmtNum(v[k])}`);
     out.push(`work: ${gen.join('  ') || 'all generic counters zero'}`);
-    const vendor = Object.keys(v).filter((k) => !(k in GENERIC_HELP)).sort();
+    const vendor = Object.keys(v).filter((k) => !(k in GENERIC_HELP) && !(k in DERIVED_HELP)).sort();
     if (vendor.length) {
       out.push('vendor counters:');
       out.push(table(['counter', 'value', 'unit'], vendor.map((k) => [k, fmtNum(v[k]), c.units[k] || '']), 'lrl'));
@@ -358,7 +358,21 @@ export function event(c, eid) {
     if (st.viewport) out.push(`  viewport: ${st.viewport[2]}x${st.viewport[3]}  topology: ${st.topology}`);
     const ds = st.depth ? `depth test=${st.depth.test} write=${st.depth.write} func=${st.depth.func}` : '';
     out.push(`  ${ds}${st.blend ? `  blend=${st.blend.map((b) => (b ? 'on' : 'off')).join(',')}${st.blendEq ? ` (${st.blendEq})` : ''}` : ''}${st.cull ? `  cull=${st.cull}` : ''}${st.stencil ? '  stencil=on' : ''}`);
-    if (st.vertexInputs !== undefined) out.push(`  vertex inputs: ${st.vertexInputs}${st.vbStrides ? `  vb strides: ${st.vbStrides.join(',')}` : ''}`);
+    if (st.vin?.length) {
+      const per = st.vin.filter((x) => !x[3]); const inst = st.vin.filter((x) => x[3]);
+      out.push(`  vertex layout: ${per.length} attributes = ${st.vertexBytes} B/vertex${inst.length ? ` + ${st.instanceBytes} B/instance (${inst.length} attrs)` : ''}${st.indexBytes ? `, ${st.indexBytes * 8}-bit indices` : ''}${st.vbStrides ? `, vb strides ${st.vbStrides.join(',')}` : ''}`);
+      out.push(`    ${per.map((x) => `${x[0]}:${x[1]}(${x[2]}B)`).join(' ')}${st.vertexBytes > 64 ? '  <-- HEAVY VERTICES: >64 B fetched per vertex (many/wide attributes, e.g. float where half/unorm would do)' : ''}`);
+    } else if (st.vertexInputs !== undefined) out.push(`  vertex inputs: ${st.vertexInputs}${st.vbStrides ? `  vb strides: ${st.vbStrides.join(',')}` : ''}`);
+    if (st.rts?.length) {
+      const parts = st.rts.map((r, i) => { const t = c.textures.get(r) || c.resources[String(r)] || {}; return `${t.fmt || '?'} ${t.bpp ? t.bpp / 8 + ' B/px' : ''}${(st.blend?.[i] ?? st.blend?.[0]) ? ' blended' : ''}${t.ms > 1 ? ` ${t.ms}xMSAA` : ''}`; });
+      out.push(`  colour output: ${parts.join(' | ')}${v?.ropBytes ? `  → ≈${fmtNum(v.ropBytes)} B ROP traffic (estimate: ps × bytes/px${st.blend?.some(Boolean) ? ' × 2 for blend read+write' : ''})` : ''}`);
+    }
+    const sv = c.shaderById.get(st.shaders?.vs); const sp = c.shaderById.get(st.shaders?.ps);
+    if (sv?.outputs?.length) out.push(`  VS→PS interpolants: ${sv.outputs.length} outputs (${sv.outputs.join(' ')})${sv.outputs.length > 10 ? '  <-- many varyings: more data per vertex to store and interpolate' : ''}`);
+    for (const s of [sv, sp].filter(Boolean)) {
+      const ss = shaderStats(c, s);
+      if (ss.indexable || ss.temps >= 32) out.push(`  ${s.stage} register pressure: ${ss.temps !== undefined ? `${ss.temps} temp registers` : ''}${ss.indexable ? `, ${ss.indexable} indexable temp array(s) → likely kept in slow local memory ("spilled")` : ''}`);
+    }
     for (const [stage, ids] of Object.entries(st.srv || {})) out.push(`  ${stage} reads: ${ids.slice(0, 12).map((r) => c.texLabel(r)).join(' | ')}${ids.length > 12 ? ` (+${ids.length - 12})` : ''}`);
     for (const [stage, ids] of Object.entries(st.uav || {})) out.push(`  ${stage} writes (UAV): ${ids.map((r) => c.texLabel(r)).join(' | ')}`);
     if (st.error) out.push(`  (state error: ${st.error})`);
@@ -525,7 +539,7 @@ export function metrics(c, filter) {
   out.push(`COLLECTED (${collected.length}) — use these names with --by/--metrics:`);
   out.push(table(['metric', 'unit', 'aggregate', 'meaning'], collected.map((k) => {
     const cat = [...c.catalog.values()].find((x) => c.keyFor(x.name) === k);
-    const help = GENERIC_HELP[k] || stripHtml(cat?.description).slice(0, 110);
+    const help = GENERIC_HELP[k] || DERIVED_HELP[k] || stripHtml(cat?.description).slice(0, 110);
     return [k, c.units[k], counterKind(k, c.units[k]) === 'wavg' ? 'weighted avg' : counterKind(k, c.units[k]), help];
   }), 'llll'));
   if (q) {

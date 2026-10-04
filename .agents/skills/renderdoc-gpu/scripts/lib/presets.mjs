@@ -22,6 +22,18 @@ export const PRESETS = {
       '^sm__maximum_warps_per_active_cycle_pct$'],
     help: 'NVIDIA register usage per thread / warp occupancy hints',
   },
+  'nv-rop': {
+    patterns: ['^(crop|zrop|prop|rop)__\\w+\\.(sum|avg\\.pct|avg\\.ratio)$'],
+    help: 'NVIDIA raster output (colour/depth ROP) activity: blending, MSAA, format bandwidth',
+  },
+  'nv-spill': {
+    patterns: ['mem_local|op_local|local_(ld|st|load|store)', '^tpc__average_registers_per_thread_shader_[a-z0-9]+\\.avg\\.(ratio|pct)$', 'warps_active'],
+    help: 'NVIDIA register pressure and local-memory (spill) traffic',
+  },
+  'nv-geometry': {
+    patterns: ['^(vaf|pda|pes|vpc|raster|setup|vtg)__\\w+\\.(sum|avg\\.pct)$'],
+    help: 'NVIDIA vertex fetch / primitive / rasterizer units',
+  },
   'nv-time': { patterns: ['^gpu__time_(duration|active)\\.sum$'], help: 'NVIDIA range duration/active time (ns)' },
   'nv-all': { families: ['nvidia'], help: 'every NVIDIA counter (hundreds; many replay passes — slow)' },
   'amd-all': { families: ['amd'], help: 'every AMD GPA counter (slow)' },
@@ -29,8 +41,9 @@ export const PRESETS = {
 };
 PRESETS['nv-pack'] = {
   patterns: [...PRESETS['nv-time'].patterns, ...PRESETS['nv-instructions'].patterns, ...PRESETS['nv-memory'].patterns,
-    ...PRESETS['nv-stalls'].patterns, ...PRESETS['nv-occupancy'].patterns],
-  help: 'nv-time + nv-instructions + nv-memory + nv-stalls + nv-occupancy (default on NVIDIA)',
+    ...PRESETS['nv-stalls'].patterns, ...PRESETS['nv-occupancy'].patterns, ...PRESETS['nv-rop'].patterns,
+    ...PRESETS['nv-spill'].patterns, ...PRESETS['nv-geometry'].patterns],
+  help: 'all nv-* sets except nv-all (default on NVIDIA)',
 };
 
 // spec: comma list of preset names, exact counter names, or re:<regex>

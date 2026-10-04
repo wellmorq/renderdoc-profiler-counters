@@ -11,6 +11,10 @@ export const GENERIC = {
   1: 'ms', 2: 'verts', 3: 'prims', 4: 'gsPrims', 5: 'rastInv', 6: 'rastPrims', 7: 'samples',
   8: 'vs', 9: 'hs', 10: 'ds', 11: 'gs', 12: 'ps', 13: 'cs', 14: 'as', 15: 'msInv',
 };
+export const DERIVED_HELP = {
+  ropBytes: 'ESTIMATE: colour bytes written by the ROPs = ps × bytes/pixel of every render target × 2 if blending (read+write)',
+  vtxBytes: 'ESTIMATE: vertex-fetch bytes = input vertices × bytes per vertex (attribute formats) + instance data',
+};
 export const GENERIC_HELP = {
   ms: 'GPU Duration (ms, timestamp-based)', verts: 'Input Vertices Read', prims: 'Input (IA) primitives',
   rastPrims: 'Rasterized primitives', rastInv: 'Rasterizer invocations', samples: 'Samples passed (depth/stencil test)',
@@ -100,6 +104,7 @@ export class Case {
     this.textures = new Map((this.info.textures || []).map((t) => [t.id, t]));
     this.catalog = new Map((this.info.counters || []).map((c) => [c.name, c]));
     this._loadCounters();
+    this._derive();
     this._buildTree();
   }
 
@@ -133,6 +138,32 @@ export class Case {
         }
       }
     }
+  }
+
+  // Estimated traffic from pipeline state x work counters (no vendor counters needed):
+  //   ropBytes ≈ ps invocations × Σ over colour targets (bytes/px × (blend ? 2 : 1))   (read-modify-write when blending)
+  //   vtxBytes ≈ input vertices × bytes per vertex (+ instances × bytes per instance)
+  _derive() {
+    let any = false;
+    for (const [eid, st] of this.state) {
+      const v = this.values.get(eid);
+      if (!v) continue;
+      if (v.ps !== undefined && st.rts?.length) {
+        let per = 0;
+        st.rts.forEach((r, i) => {
+          const t = this.textures.get(r) || this.resources[String(r)];
+          const bpp = t?.bpp ? t.bpp / 8 : 0;
+          per += bpp * (st.blend?.[i] ?? st.blend?.[0] ? 2 : 1);
+        });
+        if (per) { v.ropBytes = v.ps * per; any = true; }
+      }
+      if (v.verts !== undefined && st.vertexBytes) {
+        const a = this.byEid.get(eid);
+        v.vtxBytes = v.verts * st.vertexBytes + (st.instanceBytes ? (a?.instances || 1) * st.instanceBytes : 0);
+        any = true;
+      }
+    }
+    if (any) { this.units.ropBytes = 'Bytes'; this.units.vtxBytes = 'Bytes'; }
   }
 
   keyFor(name) {
@@ -176,6 +207,7 @@ export class Case {
       const m = String(raw).trim();
       if (!m) continue;
       if (m === '@work') { for (const k of ['ps', 'verts', 'rastPrims', 'samples', 'cs']) if (this.hasMetric(k)) add(k); continue; }
+      if (m === '@bytes') { for (const k of ['ropBytes', 'vtxBytes', 'dram__bytes_op_read.sum', 'dram__bytes_op_write.sum']) if (this.hasMetric(k)) add(k); continue; }
       if (m === '@memory') { for (const k of this.metricKeys().filter((k) => /^(dram__bytes_op_(read|write)\.sum|l1tex__t_sector_hit_rate\.avg\.pct|lts__t_sector_hit_rate\.avg\.pct)$/.test(k))) add(k); continue; }
       if (m === '@inst') { for (const k of this.metricKeys().filter((k) => /^(sm__inst_executed\.sum|smsp__inst_executed_shader_\w+\.sum)$/.test(k))) add(k); continue; }
       if (m === '@stalls') {

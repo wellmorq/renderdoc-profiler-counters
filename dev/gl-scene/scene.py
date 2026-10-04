@@ -85,6 +85,43 @@ void main(){
 }
 """
 
+FAT_EXTRA = 12  # extra float4 vertex attributes on the "fat" hero mesh
+
+LIT_FAT_VS = COMMON + """
+layout(location=0) in vec3 aPos;
+layout(location=1) in vec3 aNormal;
+layout(location=2) in vec2 aUV;
+""" + "".join("layout(location=%d) in vec4 aCustom%d;\n" % (4 + i, i) for i in range(FAT_EXTRA)) + """
+layout(std140, binding=0) uniform UnityPerDraw { mat4 unity_ObjectToWorld; };
+layout(std140, binding=1) uniform UnityPerFrame { mat4 unity_MatrixVP; mat4 _MainLightWorldToShadow; vec4 _MainLightPosition; vec4 _TimeParameters; };
+out vec3 vWorldPos; out vec3 vNormal; out vec2 vUV; out vec4 vShadowCoord;
+""" + "".join("out vec4 vCustom%d;\n" % i for i in range(FAT_EXTRA)) + """
+void main(){
+  vec4 wp = unity_ObjectToWorld * vec4(aPos,1);
+  vWorldPos = wp.xyz; vNormal = mat3(unity_ObjectToWorld)*aNormal; vUV = aUV;
+  vShadowCoord = _MainLightWorldToShadow * wp;
+""" + "".join("  vCustom%d = aCustom%d * _TimeParameters;\n" % (i, i) for i in range(FAT_EXTRA)) + """
+  gl_Position = unity_MatrixVP * wp;
+}
+"""
+
+LIT_FAT_FS = LIT_FS.replace("in vec3 vWorldPos; in vec3 vNormal; in vec2 vUV; in vec4 vShadowCoord;",
+    "in vec3 vWorldPos; in vec3 vNormal; in vec2 vUV; in vec4 vShadowCoord;\n" + "".join("in vec4 vCustom%d;\n" % i for i in range(FAT_EXTRA))).replace(
+    "outColor = vec4(col + albedo*0.05*_OcclusionStrength, 1.0);",
+    "vec4 custom = " + " + ".join("vCustom%d" % i for i in range(FAT_EXTRA)) + ";\n  outColor = vec4(col + albedo*0.05*_OcclusionStrength + custom.rgb*0.0001, 1.0);")
+
+BLOOM_LITE_FS = COMMON + """
+in vec2 vUV; out vec4 outColor;
+layout(binding=0) uniform sampler2D _SourceTex;
+layout(std140, binding=6) uniform BloomParams { vec4 _Params; vec4 _SourceTex_TexelSize; int _BlurTaps; float _Threshold; float _Scatter; float _Intensity; };
+void main(){
+  vec2 o = _SourceTex_TexelSize.xy * 0.5;
+  vec3 c = texture(_SourceTex, vUV + vec2(-o.x,-o.y)).rgb + texture(_SourceTex, vUV + vec2(o.x,-o.y)).rgb
+         + texture(_SourceTex, vUV + vec2(-o.x,o.y)).rgb + texture(_SourceTex, vUV + vec2(o.x,o.y)).rgb;
+  outColor = vec4(max(c*0.25 - _Threshold*0.1, 0.0)*_Intensity, 1);
+}
+"""
+
 SHADOW_VS = COMMON + """
 layout(location=0) in vec3 aPos;
 layout(std140, binding=0) uniform UnityPerDraw { mat4 unity_ObjectToWorld; };
@@ -224,7 +261,7 @@ def quad():
 
 
 class Mesh:
-    def __init__(self, label, data, instances=None):
+    def __init__(self, label, data, instances=None, extra=0):
         verts, idx = data
         self.count = len(idx)
         self.vao = gl.glGenVertexArrays(1)
@@ -236,6 +273,16 @@ class Mesh:
         for loc, size, off in ((0, 3, 0), (1, 3, 12), (2, 2, 24)):
             gl.glEnableVertexAttribArray(loc)
             gl.glVertexAttribPointer(loc, size, gl.GL_FLOAT, False, 32, ctypes.c_void_p(off))
+        if extra:
+            nv = len(verts) // 8
+            ex = np.random.default_rng(5).random((nv, extra * 4), dtype=np.float32)
+            eb = gl.glGenBuffers(1)
+            gl.glBindBuffer(gl.GL_ARRAY_BUFFER, eb)
+            gl.glBufferData(gl.GL_ARRAY_BUFFER, ex.nbytes, ex, gl.GL_STATIC_DRAW)
+            gl.glObjectLabel(gl.GL_BUFFER, eb, len(label + " Custom"), label + " Custom")
+            for i in range(extra):
+                gl.glEnableVertexAttribArray(4 + i)
+                gl.glVertexAttribPointer(4 + i, 4, gl.GL_FLOAT, False, extra * 16, ctypes.c_void_p(i * 16))
         gl.glBindBuffer(gl.GL_ELEMENT_ARRAY_BUFFER, ibo)
         gl.glBufferData(gl.GL_ELEMENT_ARRAY_BUFFER, idx.nbytes, idx, gl.GL_STATIC_DRAW)
         if instances is not None:
@@ -389,13 +436,15 @@ def renderdoc_api():
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--variant", choices=["a", "b"], default="a")
+    ap.add_argument("--variant", choices=["a", "b", "fat", "bloom2"], default="a")
     ap.add_argument("--out", required=True, help="capture path template (without .rdc)")
     ap.add_argument("--no-labels", action="store_true", help="no program names (like Unity D3D11 captures)")
     args = ap.parse_args()
     global LABELS
     LABELS = not args.no_labels
     b = args.variant == "b"
+    fat = args.variant == "fat"
+    bloom2 = args.variant == "bloom2"
     extra_lights = 24 if b else 4
     particles = 420 if b else 160
     taps = 25 if b else 9
@@ -420,10 +469,12 @@ def main():
         "bloom": compile_program("Hidden/Universal Render Pipeline/Bloom", FULLSCREEN_VS, BLOOM_FS),
         "uber": compile_program("Hidden/Universal Render Pipeline/UberPost", FULLSCREEN_VS, UBER_FS),
         "ui": compile_program("UI/Default", UI_VS, UI_FS),
+        "litfat": compile_program("Custom/HeroLit", LIT_FAT_VS, LIT_FAT_FS),
+        "bloomlite": compile_program("Hidden/Universal Render Pipeline/Bloom", FULLSCREEN_VS, BLOOM_LITE_FS),
     }
 
     rocks = Mesh("Rock", sphere(24, 32))
-    hero = Mesh("HeroStatue", sphere(300, 400))   # ~240k triangles
+    hero = Mesh("HeroStatue", sphere(120, 160), extra=FAT_EXTRA) if fat else Mesh("HeroStatue", sphere(300, 400))   # fat: ~38k tris, 224 B/vertex
     crate = Mesh("Crate", cube())
     rng = np.random.default_rng(7)
     pinst = np.array([[rng.uniform(-0.6, 0.6), rng.uniform(-0.5, 0.5), rng.uniform(0.25, 0.6), rng.uniform(0.2, 0.6)]
@@ -451,8 +502,8 @@ def main():
     final_fb = framebuffer("FinalTarget", color=final_tex)
     bloom_mips = []
     bw, bh = W // 2, H // 2
-    for i in range(4):
-        t = texture2d("_BloomMipDown%d" % i, bw, bh, fmt=gl.GL_RGBA16F)
+    for i in range(6 if bloom2 else 4):
+        t = texture2d("_BloomMipDown%d" % i, bw, bh, fmt=gl.GL_RGBA32F if bloom2 else gl.GL_RGBA16F)
         bloom_mips.append((t, framebuffer("BloomMip%d" % i, color=t), bw, bh))
         bw, bh = max(bw // 2, 1), max(bh // 2, 1)
 
@@ -488,16 +539,21 @@ def main():
     for i in range(36):
         x, z = (i % 6 - 2.5) * 1.6, (i // 6 - 2.5) * 1.6
         objects.append((rocks if i % 3 else crate, trs((x, 0.4, z), 0.6), "Rock_%02d" % i if i % 3 else "Crate_%02d" % i))
-    objects.append((hero, trs((0, 1.2, 0), 1.2), "HeroStatue"))
+    objects.append((hero, trs((0, 1.2, 0), 2.2 if fat else 1.2), "HeroStatue"))
 
     def draw_objects(prog, with_material):
         gl.glUseProgram(prog)
         for mesh, model, name in objects:
+            use_fat = fat and with_material and name == "HeroStatue"
+            if use_fat:
+                gl.glUseProgram(progs["litfat"])
             with Marker("RenderLoop.Draw: " + name):
                 upload(per_draw, model.T.ravel())
                 if with_material:
                     upload(per_mat, [0.8, 0.8, 0.8, 1, 2, 2, 0, 0, 0.6, 0.2, 1.0, 1.0])
                 mesh.draw()
+            if use_fat:
+                gl.glUseProgram(prog)
 
     def fullscreen(prog):
         gl.glUseProgram(prog)
@@ -560,8 +616,22 @@ def main():
                             gl.glViewport(0, 0, w, h)
                             gl.glActiveTexture(gl.GL_TEXTURE0)
                             gl.glBindTexture(gl.GL_TEXTURE_2D, src)
-                            fullscreen(progs["bloom"])
+                            fullscreen(progs["bloomlite" if bloom2 else "bloom"])
                             src = tex
+                    if bloom2:
+                        # reworked bloom: additive upsample chain back to the top mip (blended, fp32 targets)
+                        gl.glEnable(gl.GL_BLEND)
+                        gl.glBlendFunc(gl.GL_ONE, gl.GL_ONE)
+                        for i in range(len(bloom_mips) - 1, 0, -1):
+                            with Marker("Bloom Upsample %d" % (i - 1)):
+                                tex, fb, w, h = bloom_mips[i - 1]
+                                gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, fb)
+                                gl.glViewport(0, 0, w, h)
+                                gl.glActiveTexture(gl.GL_TEXTURE0)
+                                gl.glBindTexture(gl.GL_TEXTURE_2D, bloom_mips[i][0])
+                                for _ in range(3):  # three additive layers per level (scatter)
+                                    fullscreen(progs["bloomlite"])
+                        gl.glDisable(gl.GL_BLEND)
                 with Marker("UberPost"):
                     gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, final_fb)
                     gl.glViewport(0, 0, W, H)

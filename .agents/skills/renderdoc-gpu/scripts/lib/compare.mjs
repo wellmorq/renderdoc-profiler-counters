@@ -23,7 +23,7 @@ function keyedMarkers(c, roots) {
   return map;
 }
 
-const WORK_METRICS = ['ps', 'verts', 'rastPrims', 'samples', 'cs', 'sm__inst_executed.sum', 'dram__bytes_op_read.sum', 'dram__bytes_op_write.sum'];
+const WORK_METRICS = ['ps', 'verts', 'rastPrims', 'samples', 'cs', 'ropBytes', 'vtxBytes', 'sm__inst_executed.sum', 'dram__bytes_op_read.sum', 'dram__bytes_op_write.sum'];
 
 function regionStats(c, evs, metrics) {
   const ag = c.aggregate(evs, metrics);
@@ -108,7 +108,7 @@ export function compare(A, B, marker, opts = {}) {
   const strip = first && shown.every((r) => segs(r.k)[0] === first) && shown.some((r) => segs(r.k).length > 1);
   const label = (k) => { const s = segs(k); return strip ? (s.length > 1 ? s.slice(1).join(' > ') : '(root) ' + s[0]) : s.join(' > '); };
   out.push('', `MARKERS by |Δms| (depth ≤${depth}${marker ? ` under "${marker}"` : ''}; matched by name path${strip ? `; paths relative to "${trunc(first, 70)}"` : ''})`);
-  const mcols = metrics.filter((m) => ['ps', 'verts', 'cs', 'samples'].includes(m));
+  const mcols = metrics.filter((m) => ['ps', 'verts', 'cs', 'samples', 'ropBytes', 'vtxBytes'].includes(m));
   out.push(table(['A ms', 'B ms', 'Δms', 'Δ%', 'draws', ...mcols.map((m) => `Δ${m}`), 'marker'], shown.map((r) => [
     fmtMs(r.sa?.ms), fmtMs(r.sb?.ms), (r.delta >= 0 ? '+' : '') + fmtMs(r.delta), r.sa && r.sb ? fmtDelta(r.sa.ms, r.sb.ms) : (r.sa ? 'gone' : 'new'),
     `${r.sa?.draws ?? '-'}→${r.sb?.draws ?? '-'}`, ...mcols.map((m) => (r.sa && r.sb ? fmtDelta(r.sa.ag[m].v, r.sb.ag[m].v) : '')),
@@ -131,6 +131,52 @@ export function compare(A, B, marker, opts = {}) {
   }
   if (hints.length) out.push('', 'SAME WORK COUNTERS, DIFFERENT COST — per-item cost changed (constants such as loop counts, textures, state) or timing noise. Check the heaviest event (live):', ...hints,
     '  drawdiff shows nothing -> shader code (SHADERS table) or noise; confirm with `fetch <rdc> generic --repeat 5` on both.');
+
+  // state/format changes inside the regions that moved most: render targets, blending, vertex layout, textures
+  const prof = (c, node) => {
+    const p = { rt: new Map(), fmt: new Map(), vb: new Map(), tex: new Map(), draws: 0 };
+    const inc = (m, k) => m.set(k, (m.get(k) || 0) + 1);
+    for (const e of c.workUnder(node)) {
+      if (e.kind !== 'draw' && e.kind !== 'dispatch') continue;
+      p.draws++;
+      const st = c.state.get(e.eid);
+      if (!st) continue;
+      (st.rts || []).forEach((r, i) => {
+        const t = c.textures.get(r) || c.resources[String(r)] || {};
+        const bl = (st.blend?.[i] ?? st.blend?.[0]) ? ' blended' : '';
+        inc(p.rt, `${t.fmt || '?'} ${t.w || '?'}x${t.h || '?'}${bl}${t.ms > 1 ? ` ${t.ms}xMSAA` : ''}`);
+        inc(p.fmt, `${t.fmt || '?'}${t.bpp ? ` (${t.bpp / 8} B/px)` : ''}${bl}`);
+      });
+      if (st.vertexBytes) inc(p.vb, `${st.vertexBytes} B/vertex`);
+      for (const r of st.srv?.ps || st.srv?.cs || []) {
+        const t = c.textures.get(r) || c.resources[String(r)];
+        if (t?.fmt) inc(p.tex, `${t.name ? t.name + ' ' : ''}${t.fmt} ${t.w}x${t.h}`);
+      }
+    }
+    return p;
+  };
+  const fmtMap = (m) => [...m.entries()].sort((x, y) => y[1] - x[1]).map(([k, n]) => `${k}${n > 1 ? ` ×${n}` : ''}`).join(', ') || '-';
+  const sameMap = (x, y) => x.size === y.size && [...x].every(([k, n]) => y.get(k) === n);
+  const stateLines = [];
+  for (const r of rows.filter((x) => x.x && x.y && x.d >= (marker ? 0 : 1)).slice(0, 8)) {
+    const pa = prof(A, r.x.a); const pb = prof(B, r.y.a);
+    const diffs = [];
+    if (pa.draws !== pb.draws) diffs.push(`draws ${pa.draws} → ${pb.draws}`);
+    const delta = (label, x, y) => {
+      if (sameMap(x, y)) return;
+      const minus = new Map(); const plus = new Map();
+      for (const [k, n] of x) { const d = n - (y.get(k) || 0); if (d > 0) minus.set(k, d); }
+      for (const [k, n] of y) { const d = n - (x.get(k) || 0); if (d > 0) plus.set(k, d); }
+      diffs.push(`${label}: ${minus.size ? `− ${fmtMap(minus)}` : ''}${minus.size && plus.size ? '  ' : ''}${plus.size ? `+ ${fmtMap(plus)}` : ''}`);
+    };
+    if (!sameMap(pa.fmt, pb.fmt)) diffs.push(`output formats (draw count): ${fmtMap(pa.fmt)}  →  ${fmtMap(pb.fmt)}`);
+    delta('render targets', pa.rt, pb.rt);
+    delta('vertex size', pa.vb, pb.vb);
+    delta('textures read', pa.tex, pb.tex);
+    if (diffs.length) stateLines.push(`  ${trunc(segs(r.k).join(' > '), 70)} (${fmtMs(r.sa.ms)} → ${fmtMs(r.sb.ms)} ms):`, ...diffs.map((d) => `    ${trunc(d, 400)}`));
+  }
+  if (stateLines.length) out.push('', 'STATE / FORMAT CHANGES in changed regions (formats, blending, vertex layout, sampled textures):', ...stateLines,
+    '  Format/blend changes alter bytes per pixel → compare ropBytes (estimated ROP traffic) in the marker table and `event` on the heaviest draw.');
 
   // shaders
   const shA = shaderRanking(A, { stages: ['ps', 'cs', 'vs'], within: marker ? rootsA.flatMap((n) => A.workUnder(n)) : null });

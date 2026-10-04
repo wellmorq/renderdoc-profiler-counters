@@ -281,6 +281,26 @@ def counter_value(desc, v):
     return int(v.u32)
 
 
+SPECIAL_BYTES = {"R10G10B10A2": 4, "R11G11B10": 4, "R9G9B9E5": 4, "R5G6B5": 2, "R5G5B5A1": 2, "R4G4B4A4": 2,
+                 "R4G4": 1, "D16S8": 3, "D24S8": 4, "D32S8": 5, "S8": 1, "A8": 1}
+BLOCK_BYTES = {"BC1": 8, "BC4": 8, "BC2": 16, "BC3": 16, "BC5": 16, "BC6": 16, "BC7": 16, "ETC2": 8, "EAC": 16, "ASTC": 16}
+
+
+def fmt_bytes(f):
+    """(bytes per element, compressed?) — for block-compressed formats bytes per 4x4 block."""
+    t = ename(getattr(f, "type", "Regular"))
+    if t == "Regular":
+        return int(f.compByteWidth) * int(f.compCount), False
+    if t in BLOCK_BYTES:
+        return BLOCK_BYTES[t], True
+    if t in SPECIAL_BYTES:
+        return SPECIAL_BYTES[t], False
+    try:
+        return int(f.ElementSize()), False
+    except Exception:
+        return 0, False
+
+
 def tex_info(ctx, tid):
     if tid == 0:
         return None
@@ -291,9 +311,12 @@ def tex_info(ctx, tid):
     t = ctx._texmap.get(tid)
     if t is None:
         return {"id": tid, "name": ctx.names().get(tid, "")}
+    b, comp = fmt_bytes(t.format)
     return {"id": tid, "name": ctx.names().get(tid, ""), "w": int(t.width), "h": int(t.height),
             "d": int(t.depth), "mips": int(t.mips), "arr": int(t.arraysize),
-            "fmt": safe(lambda: t.format.Name(), ""), "ms": int(t.msSamp)}
+            "fmt": safe(lambda: t.format.Name(), ""), "ms": int(t.msSamp),
+            # bits per pixel: block formats store 16 pixels per block
+            "bpp": round(b * 8 / 16.0, 2) if comp else b * 8, "compressed": comp}
 
 
 # ---------------------------------------------------------------- tasks
@@ -569,11 +592,32 @@ def collect_state(ctx, a, shaders_seen):
             st["fill"] = ename(rs.fillMode)
         st["stencil"] = bool(safe(pipe.IsStencilTestEnabled, False))
         vin = safe(pipe.GetVertexInputs, []) or []
-        st["vertexInputs"] = len([v for v in vin if getattr(v, "used", True)])
+        attrs = []
+        vbytes = 0
+        ibytes = 0
+        for v in vin:
+            if not getattr(v, "used", True) or getattr(v, "genericEnabled", False):
+                continue  # constant/generic attributes are not fetched per vertex
+            b, _ = fmt_bytes(v.format)
+            per_inst = bool(getattr(v, "perInstance", False))
+            attrs.append([v.name, safe(lambda: v.format.Name(), ""), b, 1 if per_inst else 0])
+            if per_inst:
+                ibytes += b
+            else:
+                vbytes += b
+        st["vertexInputs"] = len(attrs)
+        if attrs:
+            st["vin"] = attrs
+            st["vertexBytes"] = vbytes
+            if ibytes:
+                st["instanceBytes"] = ibytes
         vbs = safe(pipe.GetVBuffers, []) or []
         strides = [int(v.byteStride) for v in vbs if rid(getattr(v, "resourceId", 0))]
         if strides:
             st["vbStrides"] = strides
+        ib = safe(pipe.GetIBuffer)
+        if ib is not None and rid(getattr(ib, "resourceId", 0)) and has_flag(rd, a.flags, "Indexed"):
+            st["indexBytes"] = int(getattr(ib, "byteStride", 0))
     return st
 
 

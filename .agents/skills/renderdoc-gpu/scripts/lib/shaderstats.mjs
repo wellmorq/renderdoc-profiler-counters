@@ -20,6 +20,8 @@ export function shaderStats(c, s) {
     if (m) out.instrSlots = Number(m[1]);
     m = text.match(/dcl_temps (\d+)/);
     if (m) out.temps = Number(m[1]);
+    // arrays indexed at runtime cannot live in registers: DXBC indexable temps, DXIL allocas, SPIR-V function arrays
+    out.indexable = (text.match(/dcl_indexableTemp\s+x\d+\[\d+\]/g) || []).length + (text.match(/=\s*alloca\s/g) || []).length;
     // texture fetches: DXBC/DXIL/SPIR-V/GLSL spellings
     out.samples = body.filter((l) => /\b(sample(_[a-z]+)*|gather4[a-z_]*|ld(_[a-z]+)*\s|OpImage(Sample|Fetch|Gather)\w*|texture(Lod|Grad|Offset|Fetch)?\s*\(|texelFetch|dx\.op\.(sample|textureLoad|textureGather)\w*)/i.test(l)).length;
     out.loops = body.filter((l) => /\b(loop|OpLoopMerge|for\s*\(|while\s*\()/.test(l)).length;
@@ -37,6 +39,7 @@ export function statsLabel(st) {
   if (st.samples) parts.push(`${st.samples} tex`);
   if (st.loops) parts.push(`${st.loops} loop`);
   if (st.temps !== undefined) parts.push(`${st.temps} temps`);
+  if (st.indexable) parts.push(`${st.indexable} local arrays`);
   return parts.join(', ');
 }
 

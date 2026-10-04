@@ -1,19 +1,28 @@
 # Setup and troubleshooting
 
-## How the CLI talks to RenderDoc
+## Backends
 
-Every live step runs `scripts/rdjob.py` inside RenderDoc's own Python. Two hosts:
+Every live step runs `scripts/rdjob.py` inside RenderDoc's Python API. Three hosts, picked in this order (override: `--host`, `RDGPU_HOST`, or `"host"` in the config):
 
-| Host | How | When |
+| Host | How | Notes |
 |---|---|---|
-| `qrenderdoc` (default) | `qrenderdoc --python rdjob.py` — the installed RenderDoc UI runs the script headless and exits; no window | Any normal RenderDoc install (Windows installer, Linux package). Nothing to build. |
-| `python` | a standalone interpreter imports the `renderdoc` module | Only when `RENDERDOC_PYTHON_PATH` points at a folder containing `renderdoc.pyd`/`renderdoc.so` built for that exact Python version (e.g. by `rdc setup-renderdoc` from rdc-cli, or a source build) |
+| `rdc` (preferred) | [rdc-cli](https://github.com/BANANASJIM/rdc-cli) daemon per capture; our jobs run in it via `rdc script` | Capture stays loaded between commands; the agent can also use rdc's own tools (`rdc --session <name> debug pixel …`, `pixel`, `pipeline`, `mesh`, `cbuffer`). Needs RenderDoc's Python module **built locally** by `rdc setup-renderdoc`. |
+| `qrenderdoc` (fallback) | `qrenderdoc --python rdjob.py` of an installed RenderDoc, headless | Nothing to build; one capture load per command unless `session` is used; no rdc tools. |
+| `python` | a standalone interpreter + `RENDERDOC_PYTHON_PATH` | For custom builds. |
 
-`doctor` shows which host is used. Force one with `--host qrenderdoc|python` or `RDGPU_HOST`.
+## `install` — what it does (run by the agent)
 
-RenderDoc lookup order: `RDGPU_RENDERDOC` (install dir or exe) → `RENDERDOC_DIR` → Windows registry `.rdc` association → `C:\Program Files\RenderDoc` → PATH. Linux: `/usr/bin/qrenderdoc`, `/opt/renderdoc*/bin`, PATH. Get RenderDoc from https://renderdoc.org/builds (any recent 1.x; 1.30+ recommended).
+1. Checks Node 18+ and git.
+2. C++ toolchain: Windows → Visual Studio Build Tools with the C++ workload (detected with vswhere). Missing → `[NEED USER]` with the command for the user (admin/UAC):
+   `winget install --id Microsoft.VisualStudio.2022.BuildTools -e --override "--passive --wait --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"`. Linux → cmake, ninja, g++, bison, autotools, X11/GL dev packages.
+3. Installs [uv](https://docs.astral.sh/uv/) if missing (official installer script).
+4. `uv tool install rdc-cli` (puts `rdc` in `~/.local/bin`, Windows `%USERPROFILE%\.local\bin`; run `uv tool update-shell` if it isn't on PATH — the CLI finds it there anyway).
+5. `rdc setup-renderdoc --version <latest RenderDoc tag>` — clones RenderDoc and compiles its Python module for rdc's Python (10–40 min; needs network to github.com). Newer RenderDoc replays captures made by older versions, so the latest tag is used unless `--renderdoc-version vX.YY` is given. Output lands in `%LOCALAPPDATA%\rdc\renderdoc` (Linux `~/.local/renderdoc`).
+6. `rdc doctor` must report `renderdoc-module` and `replay-support` ok (`renderdoccmd` missing is irrelevant here).
+7. Writes the config (`%APPDATA%\rdgpu\config.json`, Linux `~/.config/rdgpu/config.json`): `{"host": "rdc", "rdc": "<path>"}`.
+8. Nsight Perf SDK: if an NVIDIA GPU is present and the library is missing, it looks for a downloaded SDK (see below) or prints what the user must download.
 
-The capture is replayed on the local GPU: it needs the same graphics API (a D3D11 capture replays only on Windows) and a GPU/driver that can create the same device. Counters come from the **replay** GPU.
+`install --check` only reports. `install --renderdoc-version v1.46` pins the version. Re-running is safe: finished steps are skipped.
 
 ## Nsight Perf SDK (NVIDIA hardware counters)
 
@@ -37,6 +46,8 @@ Other vendors: AMD counters (GPA) ship with RenderDoc → `fetch <rdc> amd-all` 
 
 | Symptom | Cause / fix |
 |---|---|
+| `rdc could not open the capture` | Read the rdc message; `rdc doctor`; captures newer than the built module need a newer `install --renderdoc-version`; replay needs the capture's API and a compatible GPU. |
+| `rdc-cli not found` / `NOT READY` in doctor | Run `install`; if the build failed, read its output (toolchain, network, antivirus locking the build dir). The qrenderdoc fallback keeps working meanwhile. |
 | `qrenderdoc started but did not run the script ... waiting on a dialog` | First RenderDoc launch shows "Anonymous Analytics"; with "manually verify" selected it asks monthly. User opens RenderDoc once, answers, closes it. |
 | `RenderDoc exited ... without writing a result` | Replay crashed. The error includes the tail of the newest RenderDoc log (`%TEMP%\RenderDoc\*.log`, `/tmp/RenderDoc/*.log`). Retry once; try `--no-state` (fewer replays); update GPU driver/RenderDoc. |
 | `Capture cannot be replayed on this machine` | Wrong API/platform/GPU. Analyse it on the machine where it was captured (same API, compatible GPU). |
@@ -45,6 +56,6 @@ Other vendors: AMD counters (GPA) ship with RenderDoc → `fetch <rdc> amd-all` 
 | Counter "missing" in a fetch | Not offered for this GPU/API/SDK version. `metrics <rdc> <part of name>` lists what exists. |
 | Wrong `.rdc` cache reused | The cache is keyed by file size+mtime. `open --force` re-extracts. Cache root: `%LOCALAPPDATA%\rdgpu\cache` (Linux `~/.cache/rdgpu`); `RDGPU_CASES=<dir>` moves it. Deleting it is always safe. |
 
-## Optional: rdc-cli for interactive debugging
+## qrenderdoc fallback details
 
-https://github.com/BANANASJIM/rdc-cli (MIT) is a broader RenderDoc CLI (pixel history, shader debugging, mesh/buffer export, VFS browsing) with a daemon that keeps a capture open. On Windows it builds the RenderDoc Python module from source (`uv tool install rdc-cli`, `rdc setup-renderdoc` — needs Git and Visual Studio Build Tools). Once built, point this skill at the same module with `RENDERDOC_PYTHON_PATH=<rdc's renderdoc dir>` and `RDGPU_PYTHON=<the python it was built for>` if you prefer the `python` host. This skill does not require it.
+Lookup order: `RDGPU_RENDERDOC` (install dir or exe) → `RENDERDOC_DIR` → Windows registry `.rdc` association → `C:\Program Files\RenderDoc` → PATH. Linux: `/usr/bin/qrenderdoc`, `/opt/renderdoc*/bin`, PATH. RenderDoc: https://renderdoc.org/builds.
