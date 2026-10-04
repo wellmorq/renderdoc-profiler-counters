@@ -5,3 +5,5 @@ Thumbs.db
 # User data
 *.rdc
 perf-analysis/
+*.rdgpu/
+__pycache__/
