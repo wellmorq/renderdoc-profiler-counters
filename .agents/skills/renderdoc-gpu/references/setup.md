@@ -39,7 +39,7 @@ Other vendors: AMD counters (GPA) ship with RenderDoc → `fetch <rdc> amd-all` 
 |---|---|
 | `qrenderdoc started but did not run the script ... waiting on a dialog` | First RenderDoc launch shows "Anonymous Analytics"; with "manually verify" selected it asks monthly. User opens RenderDoc once, answers, closes it. |
 | `RenderDoc exited ... without writing a result` | Replay crashed. The error includes the tail of the newest RenderDoc log (`%TEMP%\RenderDoc\*.log`, `/tmp/RenderDoc/*.log`). Retry once; try `--no-state` (fewer replays); update GPU driver/RenderDoc. |
-| `Capture cannot be replayed on this machine` | Wrong API/platform/GPU. Replay where it was captured, or export TXT+CSV from the RenderDoc UI there and use `import`. |
+| `Capture cannot be replayed on this machine` | Wrong API/platform/GPU. Analyse it on the machine where it was captured (same API, compatible GPU). |
 | `DEGRADED replay` in summary | RenderDoc fell back (e.g. different GPU). Timings and counters are less trustworthy; say so. |
 | Job timed out | `--timeout <sec>` (default 1800). Big frames: `open --state-limit 2000` or `--no-shaders`. |
 | Counter "missing" in a fetch | Not offered for this GPU/API/SDK version. `metrics <rdc> <part of name>` lists what exists. |
@@ -48,7 +48,3 @@ Other vendors: AMD counters (GPA) ship with RenderDoc → `fetch <rdc> amd-all` 
 ## Optional: rdc-cli for interactive debugging
 
 https://github.com/BANANASJIM/rdc-cli (MIT) is a broader RenderDoc CLI (pixel history, shader debugging, mesh/buffer export, VFS browsing) with a daemon that keeps a capture open. On Windows it builds the RenderDoc Python module from source (`uv tool install rdc-cli`, `rdc setup-renderdoc` — needs Git and Visual Studio Build Tools). Once built, point this skill at the same module with `RENDERDOC_PYTHON_PATH=<rdc's renderdoc dir>` and `RDGPU_PYTHON=<the python it was built for>` if you prefer the `python` host. This skill does not require it.
-
-## Legacy input
-
-`import <dir>` turns a RenderDoc UI "Event Browser → Export" TXT plus a "Performance Counter Viewer → Save CSV" file (one pair per folder) into a case. Timing/counter queries and `compare` work; `event` state, shaders and live commands do not.

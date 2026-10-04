@@ -4,12 +4,10 @@ import { parseArgs } from 'node:util';
 import { loadCase } from './lib/case.mjs';
 import { compare } from './lib/compare.mjs';
 import { findSource } from './lib/findsource.mjs';
-import { importLegacy } from './lib/legacy.mjs';
 import * as live from './lib/live.mjs';
 import { fetchCounters, openCapture } from './lib/prepare.mjs';
 import { presetHelp } from './lib/presets.mjs';
 import * as q from './lib/query.mjs';
-import { writeReport } from './lib/report.mjs';
 import { doctor, setupNvPerf } from './lib/setup.mjs';
 import { config, configPath } from './lib/env.mjs';
 
@@ -24,7 +22,6 @@ SETUP
 PREPARE (runs RenderDoc once, caches everything next to the capture as <capture>.rdgpu/)
   open <rdc> [--counters <sets>] [--repeat N] [--no-state] [--no-shaders] [--state-limit N] [--force]
   fetch <rdc> <sets|names|re:regex> [--repeat N]   add counters to a prepared case
-  import <dir-with-txt+csv>           legacy: RenderDoc UI "Event Browser" TXT + counters CSV export
 
 QUERY (offline, instant)
   summary <rdc>                       frame overview, top passes/events/shaders
@@ -37,7 +34,6 @@ QUERY (offline, instant)
   metrics <rdc> [filter]              collected + available counters with descriptions
   compare <before.rdc> <after.rdc> [marker] [--depth N]
   find-source <rdc> <shader-id> --project <dir>   rank project shader files by identifier overlap
-  report <rdc>                        write an interactive HTML report
 
 LIVE (replays the capture; seconds to minutes)
   draw <rdc> <eid> [--all]            constant-buffer values, texture slots, targets
@@ -143,13 +139,6 @@ async function main() {
       out(`fetched ${r.fetched} counters for ${r.events ?? 0} events${r.missing?.length ? `; missing: ${r.missing.join(', ')}` : ''}`);
       return;
     }
-    case 'import': {
-      need(1, '<directory with RenderDoc TXT + CSV exports>');
-      const dir = importLegacy(args[0], { out: o.out });
-      out(`case: ${dir}\n`);
-      out(q.summary(loadCase(dir), { n: num(o.n, 8) }));
-      return;
-    }
     case 'summary': need(1, '<capture>'); out(q.summary(loadCase(args[0]), { n: num(o.n, 8) })); return;
     case 'tree': {
       need(1, '<capture> [marker|eid]');
@@ -186,7 +175,6 @@ async function main() {
       out(findSource(loadCase(args[0]), args[1], o.project, { n: num(o.n, 8) }));
       return;
     }
-    case 'report': need(1, '<capture>'); out(writeReport(loadCase(args[0]), { out: o.out })); return;
     case 'draw': need(2, '<capture> <eid>'); out(await live.draw(loadCase(args[0]), Number(args[1]), { ...common, all: o.all })); return;
     case 'rt': need(2, '<capture> <eid>'); out(await live.rt(loadCase(args[0]), Number(args[1]), { ...common, depth: !!parseDepthFlag(o), all: o.all, resource: o.resource })); return;
     case 'usage': need(2, '<capture> <resource-id>'); out(await live.usage(loadCase(args[0]), Number(args[1]), { ...common, n: num(o.n, 60) })); return;

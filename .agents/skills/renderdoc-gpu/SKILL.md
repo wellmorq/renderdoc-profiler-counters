@@ -20,7 +20,7 @@ Run `S` without arguments for the full command list. Every command takes the `.r
 - `doctor` says `STATUS: ready` → go on. Otherwise follow its message. Details and troubleshooting: [references/setup.md](references/setup.md).
 - Summary line `NVIDIA counters UNAVAILABLE` on an NVIDIA GPU → the Nsight Perf SDK is missing. Run `S setup-nvperf`. It finds/installs the SDK DLL if the user already downloaded it; otherwise it prints what the **user** must download (NVIDIA login required — you cannot do it). Relay that, continue the analysis with generic counters, and say what the NVIDIA counters would add.
 - `qrenderdoc ... waiting on a dialog` → ask the user to open RenderDoc once and answer its prompt.
-- Capture replay fails (`cannot be replayed on this machine`) → the capture needs the same graphics API and a compatible GPU; say so, offer `import` of UI exports instead.
+- Capture replay fails (`cannot be replayed on this machine`) → the capture needs the same graphics API and a compatible GPU; say so and ask the user to run the analysis on the capturing machine.
 
 ## 2. Pick the path by question
 
@@ -63,7 +63,7 @@ Write the answer in the user's language. Structure (omit empty parts, keep it ti
 2. **Evidence** — a small table: event/marker (name + EID), ms and % of frame, the 2–4 counters that support the claim, before→after when comparing. Quote numbers from tool output, with units.
 3. **Confidence** — `confirmed` (directly measured), `likely` (several counters agree), `hypothesis` (needs a check). One line per claim if they differ.
 4. **Next steps** — 2–3 concrete checks or changes, each tied to the evidence (an `experiment` you can run, a counter to fetch, a setting to toggle in the engine). No generic optimisation lists.
-5. **Artifacts** — paths you produced (images, edited shaders, report.html) when relevant.
+5. **Artifacts** — paths you produced (images, edited shaders) when relevant.
 
 Templates and examples: [references/output-format.md](references/output-format.md).
 

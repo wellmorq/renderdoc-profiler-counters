@@ -16,7 +16,7 @@ export const GENERIC_HELP = {
   vs: 'VS invocations', ps: 'PS invocations (pixel shader threads)', cs: 'CS invocations (compute threads)',
   gs: 'GS invocations', hs: 'HS invocations', ds: 'DS invocations', gsPrims: 'GS output primitives',
 };
-const LEGACY_GENERIC_NAMES = {
+const GENERIC_NAMES = {
   'GPU Duration': 'ms', 'Input Vertices Read': 'verts', 'Input Primitives': 'prims', 'IA Primitives': 'prims',
   'GS Primitives': 'gsPrims', 'Rasterizer Invocations': 'rastInv', 'Rasterized Primitives': 'rastPrims',
   'Samples Passed': 'samples', 'VS Invocations': 'vs', 'HS Invocations': 'hs', 'TCS Invocations': 'hs',
@@ -112,7 +112,7 @@ export class Case {
   keyFor(name) {
     const cat = this.catalog.get(name);
     if (cat && cat.family === 'generic' && GENERIC[cat.id]) return GENERIC[cat.id];
-    if (LEGACY_GENERIC_NAMES[name]) return LEGACY_GENERIC_NAMES[name];
+    if (GENERIC_NAMES[name]) return GENERIC_NAMES[name];
     return name;
   }
 

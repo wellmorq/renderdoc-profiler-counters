@@ -30,8 +30,7 @@ Run it without arguments for every command. `SKILL.md` describes the workflow ag
 |---|---|
 | `.agents/skills/renderdoc-gpu/` | the skill (SKILL.md, CLI in `scripts/`, references) |
 | `scripts/rdjob.py` | runs inside RenderDoc's Python (3.6-compatible): extraction, counters, state, shaders, experiments |
-| `scripts/lib/*.mjs` | host discovery, job runner, cache model, queries, compare, find-source, Nsight Perf setup, HTML report |
+| `scripts/lib/*.mjs` | host discovery, job runner, cache model, queries, compare, find-source, Nsight Perf setup |
 | `tests/rdgpu.test.mjs` | `node --test tests/rdgpu.test.mjs` (offline); set `RDGPU_TEST_CAPTURE=<.rdc>` to also run a live replay test |
-| `tests/fixtures/legacy-hdrp/` | real HDRP frame export (Event Browser TXT + NVIDIA counters CSV) for `import` |
 | `dev/gl-scene/scene.py` | synthetic URP-like OpenGL frame used to produce test captures (runs on Mesa llvmpipe under Xvfb) |
 | `dev/fixtures/MiniUnityProject/` | tiny Unity-like project for `find-source` tests |

@@ -13,7 +13,6 @@ import { fileURLToPath } from 'node:url';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SKILL = path.join(ROOT, '.agents', 'skills', 'renderdoc-gpu');
 const CLI = path.join(SKILL, 'scripts', 'rdgpu.mjs');
-const LEGACY = path.join(ROOT, 'tests', 'fixtures', 'legacy-hdrp');
 const PROJECT = path.join(ROOT, 'dev', 'fixtures', 'MiniUnityProject');
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'rdgpu-test-'));
@@ -23,7 +22,6 @@ function cli(args, opts = {}) {
 }
 
 const { Case, counterKind } = await import(path.join(SKILL, 'scripts', 'lib', 'case.mjs'));
-const { parseEventsTxt, parseCountersCsv } = await import(path.join(SKILL, 'scripts', 'lib', 'legacy.mjs'));
 const { expandCounterSpec } = await import(path.join(SKILL, 'scripts', 'lib', 'presets.mjs'));
 const { shaderStats } = await import(path.join(SKILL, 'scripts', 'lib', 'shaderstats.mjs'));
 const { setupNvPerf } = await import(path.join(SKILL, 'scripts', 'lib', 'setup.mjs'));
@@ -155,32 +153,6 @@ test('shaderStats parses DXBC disassembly', () => {
   assert.equal(st.temps, 7);
   assert.equal(st.samples, 2);
   assert.equal(st.loops, 1);
-});
-
-test('legacy TXT/CSV import keeps hierarchy and NVIDIA units', () => {
-  const rows = parseEventsTxt(fs.readFileSync(path.join(LEGACY, 'events.txt'), 'utf8'));
-  const chain = rows.find((r) => r.name === 'UIR.DrawChain');
-  assert.equal(chain.depth, 0);
-  const child = rows.find((r) => r.eid === 113);
-  assert.equal(child.kind, 'draw');
-  assert.equal(child.indices, 6);
-  const { cols } = parseCountersCsv(fs.readFileSync(path.join(LEGACY, 'counters.csv'), 'utf8'));
-  assert.equal(cols[0].name, 'GPU Duration');
-  assert.equal(cols[0].unit, 'Seconds');
-  assert.equal(cols.find((x) => x.name === 'dram__bytes_op_read.sum').unit, 'Bytes');
-
-  const d = tmp();
-  fs.copyFileSync(path.join(LEGACY, 'events.txt'), path.join(d, 'events.txt'));
-  fs.copyFileSync(path.join(LEGACY, 'counters.csv'), path.join(d, 'counters.csv'));
-  const r = cli(['import', d]);
-  assert.equal(r.code, 0, r.err);
-  assert.match(r.out, /3360 draws, 111 dispatches/);
-  const caseDir = path.join(d, 'events.rdgpu');
-  const t = cli(['top', caseDir, '--by', 'dram__bytes_op_read.sum', '-n', '3']);
-  assert.equal(t.code, 0, t.err);
-  assert.match(t.out, /dramRd/);
-  const tr = cli(['tree', caseDir, 'Deferred Lighting', '--metrics', 'l1tex__t_sector_hit_rate.avg.pct']);
-  assert.match(tr.out, /~/);
 });
 
 test('counter presets expand to patterns and names', () => {
