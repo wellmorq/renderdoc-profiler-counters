@@ -60,6 +60,7 @@ Names: markers come from the engine (Unity: `RenderLoop.Draw`, `DrawOpaqueObject
 - `ps / viewport pixels` from `event` ≈ how many times each screen pixel was shaded by that draw (overdraw/coverage). Fullscreen passes ≈ 1.0. `MICRO-TRIANGLES` (<1 shaded pixel per triangle) means the cost is geometry density, not the pixel shader — don't read `ns per ps invocation` as shader cost then.
 - `tree` footer for a marker: draw-time percentiles and how much time goes to draws that produce **0 pixels** (occluded/off-screen work) — a common Unity finding (missing occlusion culling, duplicate depth prepass).
 - `WARNING replay GPU is a SOFTWARE rasterizer` (or `DEGRADED`): relative numbers only; clears and texture-heavy events are distorted. Say so in the answer.
+- `summary` prints FINDINGS — heuristic leads (dominant draw, micro-triangles, 0-pixel draws, overdraw, expensive fullscreen passes, `/Od` shaders, software-replay artifacts). Verify each before reporting it; if the user asks for "top N" and fewer real problems exist, give fewer and say why — never pad the list with artifacts.
 - Repeats: `--repeat N` on `open`/`fetch`/`experiment` stores min–max; `event` shows the range. When ranges of two things overlap, the difference is not proven.
 
 ## 4. Shader source

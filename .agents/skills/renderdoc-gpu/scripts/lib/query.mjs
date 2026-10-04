@@ -123,6 +123,9 @@ export function summary(c, opts = {}) {
     if (loose.length && looseMs >= frame * 0.01) rows.push([fmtMs(looseMs), fmtPct((looseMs / frame) * 100), loose.filter((a) => a.kind === 'draw').length, loose.filter((a) => a.kind === 'dispatch').length, '(events outside any marker at this level)']);
     out.push(table(['ms', '%frame', 'draws', 'disp', 'marker @eid'], rows, 'rrrrl'));
 
+    const fnd = findings(c);
+    if (fnd.length) out.push('', 'FINDINGS (automatic heuristics — verify each with event/draw/experiment)', ...fnd.map((f) => '  - ' + f));
+
     out.push('', 'TOP EVENTS');
     out.push(topTable(c, { n: opts.n || 8, by: 'ms' }));
     const sh = shaderRanking(c, { stages: ['ps', 'cs'] });
@@ -134,6 +137,43 @@ export function summary(c, opts = {}) {
   if (/software|llvmpipe|warp/i.test(c.info.vendor || '') || c.info.degraded) out.push('', 'REMINDER replay is on a software/degraded GPU: only relative numbers are meaningful.');
   out.push('', 'NEXT  tree <capture> [marker] | top <capture> --in <marker> | event <capture> <eid> | shaders <capture> | shader <capture> <id>');
   return out.join('\n');
+}
+
+export function findings(c) {
+  const frame = c.frameMs();
+  if (!frame) return [];
+  const evs = c.frameEvents().filter((a) => c.ms(a.eid) !== null);
+  const draws = evs.filter((a) => a.kind === 'draw');
+  const pct = (ms) => fmtPct((ms / frame) * 100);
+  const where = (a) => `${trunc(a.name, 30)} @${a.eid} in ${pathStr(c, a, 50)}`;
+  const out = [];
+  const soft = /software|llvmpipe|warp/i.test(c.info.vendor || '');
+  const top = [...evs].sort((x, y) => c.ms(y.eid) - c.ms(x.eid));
+  for (const a of top.slice(0, 2)) if (c.ms(a.eid) >= frame * 0.25) out.push(`one ${a.kind} dominates: ${where(a)} = ${pct(c.ms(a.eid))} of the frame`);
+  const micro = draws.filter((a) => (c.get(a.eid, 'rastPrims') || 0) > 10000 && c.get(a.eid, 'ps') > 0 && c.get(a.eid, 'ps') / c.get(a.eid, 'rastPrims') < 1)
+    .sort((x, y) => c.ms(y.eid) - c.ms(x.eid));
+  if (micro.length) out.push(`micro-triangles: ${micro.length} draw(s), ${pct(micro.reduce((s, a) => s + c.ms(a.eid), 0))} of frame; worst ${where(micro[0])}: ${fmtNum(c.get(micro[0].eid, 'rastPrims'))} triangles for ${fmtNum(c.get(micro[0].eid, 'ps'))} pixels (LOD/mesh density)`);
+  if (c.hasMetric('samples')) {
+    const zero = draws.filter((a) => c.get(a.eid, 'samples') === 0 && (c.get(a.eid, 'rastPrims') || 0) > 0 && !(c.state.get(a.eid)?.depth && c.state.get(a.eid).depth.test === false));
+    const ms = zero.reduce((s, a) => s + c.ms(a.eid), 0);
+    if (ms >= frame * 0.03) out.push(`${zero.length} draws rasterize triangles but pass 0 samples (fully occluded/off-screen): ${fmtMs(ms)} ms = ${pct(ms)} — occlusion culling / draw distance`);
+  }
+  const od = draws.filter((a) => { const st = c.state.get(a.eid); const ps = c.get(a.eid, 'ps'); return st?.viewport && ps && st.blend?.[0] && ps / (st.viewport[2] * st.viewport[3]) > 3 && c.ms(a.eid) >= frame * 0.01; })
+    .sort((x, y) => c.ms(y.eid) - c.ms(x.eid));
+  if (od.length) { const a = od[0]; const st = c.state.get(a.eid); out.push(`blended overdraw: ${where(a)} shades ${(c.get(a.eid, 'ps') / (st.viewport[2] * st.viewport[3])).toFixed(1)}× its viewport (${pct(c.ms(a.eid))})${od.length > 1 ? `, +${od.length - 1} more blended draws >3×` : ''}`); }
+  const fs = draws.filter((a) => { const st = c.state.get(a.eid); const ps = c.get(a.eid, 'ps'); return st?.viewport && ps && Math.abs(ps / (st.viewport[2] * st.viewport[3]) - 1) < 0.1 && c.ms(a.eid) >= frame * 0.05; })
+    .sort((x, y) => c.ms(y.eid) - c.ms(x.eid));
+  for (const a of fs.slice(0, 2)) {
+    const s = c.shaderById.get(c.shaderOf(a.eid, 'ps')); const st = s ? statsLabel(shaderStats(c, s)) : '';
+    out.push(`expensive fullscreen pass: ${where(a)} ${pct(c.ms(a.eid))}, ${((c.ms(a.eid) * 1e6) / c.get(a.eid, 'ps')).toFixed(0)} ns/pixel${st ? ` (ps: ${st})` : ''} — check loop/sample counts with \`draw\``);
+  }
+  const odShaders = shaderRanking(c, { stages: ['ps', 'cs', 'vs'] }).filter((r) => r.ms >= frame * 0.02 && isDebugCompiled(c.shaderById.get(r.id) || {}));
+  if (odShaders.length) out.push(`${odShaders.length} expensive shader(s) compiled without optimisation (/Od), e.g. ${odShaders[0].id}: timings pessimistic — Unity debug pragma left on?`);
+  if (soft) {
+    const cc = evs.filter((a) => (a.kind === 'clear' || a.kind === 'copy') && c.ms(a.eid) >= frame * 0.02);
+    for (const a of cc.slice(0, 2)) out.push(`${a.kind} ${where(a)} = ${pct(c.ms(a.eid))}: probably a software-replay artifact (cheap on real GPUs) — don't report it as a problem without a hardware capture`);
+  }
+  return out;
 }
 
 export function topTable(c, { n = 20, by = 'ms', within = null, kinds = ['draw', 'dispatch', 'clear', 'copy'] } = {}) {
@@ -383,7 +423,15 @@ export function shaderSource(c, idSpec, opts = {}) {
     try { lines = fs.readFileSync(f, 'utf8').split(/\r?\n/); } catch { continue; }
     out.push(`=== ${f} (${lines.length} lines)`);
     if (re) {
-      lines.forEach((l, i) => { if (re.test(l)) out.push(`${String(i + 1).padStart(5)}: ${l}`); });
+      const ctx = opts.context || 0;
+      const keep = new Set();
+      lines.forEach((l, i) => { if (re.test(l)) for (let k = Math.max(0, i - ctx); k <= Math.min(lines.length - 1, i + ctx); k++) keep.add(k); });
+      let prev = -2;
+      for (const i of [...keep].sort((a, b) => a - b)) {
+        if (ctx && i !== prev + 1 && prev >= 0) out.push('  ---');
+        out.push(`${String(i + 1).padStart(5)}${re.test(lines[i]) ? ':' : ' '} ${lines[i]}`);
+        prev = i;
+      }
     } else {
       const max = opts.all ? lines.length : 400;
       lines.slice(0, max).forEach((l, i) => out.push(`${String(i + 1).padStart(5)}: ${l}`));

@@ -29,7 +29,7 @@ QUERY (offline, instant)
   top <rdc> [--by <metric>] [--in <marker|eid>] [--kind draw,dispatch] [-n N]
   event <rdc> <eid>                   counters, derived ratios, pipeline state, bound textures
   shaders <rdc> [--stage ps,cs] [--in <marker>] [-n N]
-  shader <rdc> <shader-id> [--src [--grep re]]   reflection, flags, users; --src prints embedded source (or disassembly)
+  shader <rdc> <shader-id> [--src [--grep re [-C N]]]   reflection, flags, users; --src prints embedded source (or disassembly)
   find <rdc> <text>                   markers, shaders (cbuffer/texture names), textures
   metrics <rdc> [filter]              collected + available counters with descriptions
   compare <before.rdc> <after.rdc> [marker] [--depth N]
@@ -93,6 +93,7 @@ const OPTIONS = {
   stop: { type: 'boolean' },
   idle: { type: 'string' },
   grep: { type: 'string' },
+  context: { type: 'string', short: 'C' },
   resource: { type: 'string' },
   verbose: { type: 'boolean' },
   quiet: { type: 'boolean', short: 'q' },
@@ -176,7 +177,7 @@ async function main() {
     case 'shader': {
       need(2, '<capture> <shader-id>');
       const c = loadCase(args[0]);
-      out(o.src || o.grep ? q.shaderSource(c, args[1], { grep: o.grep, all: o.all }) : q.shader(c, args[1]));
+      out(o.src || o.grep ? q.shaderSource(c, args[1], { grep: o.grep, all: o.all, context: o.context ? Number(o.context) : 2 }) : q.shader(c, args[1]));
       return;
     }
     case 'find': need(2, '<capture> <text>'); out(q.find(loadCase(args[0]), args.slice(1).join(' '))); return;
