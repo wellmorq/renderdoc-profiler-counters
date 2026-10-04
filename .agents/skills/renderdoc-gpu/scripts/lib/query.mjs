@@ -1,23 +1,13 @@
 // Offline queries over a prepared case. Output is compact text meant for an agent's context.
 import fs from 'node:fs';
 import path from 'node:path';
-import { GENERIC_HELP, WORK_KINDS, counterKind } from './case.mjs';
+import { GENERIC_HELP, WORK_KINDS, counterKind, shortMetric } from './case.mjs';
 import { bar, fmtMs, fmtNum, fmtPct, table, trunc } from './format.mjs';
 import { isDebugCompiled, shaderStats, statsLabel } from './shaderstats.mjs';
 
 const stripHtml = (s) => String(s || '').replace(/<br\/?>/g, '; ').replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
 
-export function shortMetric(k) {
-  return k
-    .replace(/^smsp__warp_issue_stalled_(.*)_per_warp_active\.avg\.pct$/, 'stall_$1%')
-    .replace(/^smsp__inst_executed_shader_(\w+)\.sum$/, 'inst_$1')
-    .replace(/^sm__inst_executed\.sum$/, 'inst')
-    .replace(/^dram__bytes_op_read\.sum$/, 'dramRd')
-    .replace(/^dram__bytes_op_write\.sum$/, 'dramWr')
-    .replace(/^l1tex__t_sector_hit_rate\.avg\.pct$/, 'L1hit%')
-    .replace(/^lts__t_sector_hit_rate\.avg\.pct$/, 'L2hit%')
-    .replace(/^gpu__time_duration\.sum$/, 'nvTime_ns');
-}
+export { shortMetric };
 
 // Marker path, keeping the innermost (most specific) markers when it must be shortened.
 export function pathStr(c, a, max = 70) {
@@ -75,6 +65,8 @@ export function summary(c, opts = {}) {
   const out = [];
   out.push(`CAPTURE  ${c.meta.capture} ${size ? `(${size})` : ''}`);
   out.push(`API      ${c.info.api || '?'} | replay GPU vendor ${c.info.vendor || '?'} | RenderDoc ${c.info.renderdocVersion || c.meta.renderdoc || '?'} via ${c.meta.host || '?'}${c.info.degraded ? ' | DEGRADED replay (results less reliable)' : ''}`);
+  if (/software|llvmpipe|warp/i.test(c.info.vendor || '')) out.push('WARNING  replay GPU is a SOFTWARE rasterizer: compare only relative numbers; clears, texture fetches and timing noise behave unlike a real GPU');
+  out.push(`CACHE    ${c.dir} (derived from the .rdc, safe to delete)`);
   if (c.info.driverAtCapture) out.push(`CAPTURED ${c.info.driverAtCapture}${c.info.machineAtCapture ? ' on ' + c.info.machineAtCapture : ''}`);
   if (fs.existsSync(path.join(c.dir, 'thumbnail.png'))) out.push(`THUMB    ${path.join(c.dir, 'thumbnail.png')} (what the frame looks like)`);
   out.push(`FRAME    ${c.actions.length} actions: ${w.draws} draws, ${w.dispatches} dispatches, ${w.clears} clears, ${w.copies} copies, ${w.markers} markers`);
@@ -165,7 +157,7 @@ export function tree(c, query, opts = {}) {
   const depth = opts.depth ?? 2;
   const topN = opts.top ?? 12;
   const minPct = opts.minPct ?? 0;
-  const metrics = (opts.metrics || []).map((m) => c.resolveMetric(m));
+  const metrics = c.expandMetrics(opts.metrics || [], nodes.flatMap((n) => c.workUnder(n)));
   const lines = [];
   const header = ['ms', '%frame', 'draws', 'disp', ...metrics.map(shortMetric), 'name @eid'];
   const rows = [];
@@ -210,7 +202,31 @@ export function tree(c, query, opts = {}) {
     lines.push(`${nodes.length} matches for "${query}", combined ${fmtMs(ms)} ms (${frame ? fmtPct((ms / frame) * 100) : '-'})`);
   }
   if (metrics.some((m) => counterKind(m, c.units[m]) === 'wavg')) lines.push('~ = duration-weighted average of child events (estimate, not a marker-wide recomputation)');
+  if (query && query !== '.' && query !== '*') lines.push(...distribution(c, nodes.flatMap((n) => c.workUnder(n))));
   return lines.join('\n');
+}
+
+// How the time of a region is spread over its draws: tail of tiny draws, draws that produce no pixels.
+export function distribution(c, evs) {
+  const draws = evs.filter((e) => e.kind === 'draw' && c.ms(e.eid) !== null);
+  if (draws.length < 2) return [];
+  const ms = draws.map((e) => c.ms(e.eid)).sort((a, b) => a - b);
+  const total = ms.reduce((a, b) => a + b, 0);
+  const q = (p) => ms[Math.min(ms.length - 1, Math.floor(p * ms.length))];
+  const top10 = ms.slice(-Math.max(1, Math.ceil(ms.length * 0.1))).reduce((a, b) => a + b, 0);
+  const out = [`draws: ${draws.length}, p50 ${fmtMs(q(0.5))} ms, p90 ${fmtMs(q(0.9))} ms, max ${fmtMs(ms[ms.length - 1])} ms; heaviest 10% of draws = ${fmtPct((top10 / total) * 100)} of the time`];
+  const px = c.hasMetric('samples') ? 'samples' : (c.hasMetric('ps') ? 'ps' : null);
+  if (px) {
+    const zero = draws.filter((e) => !c.get(e.eid, px));
+    const tiny = draws.filter((e) => { const v = c.get(e.eid, px) || 0; return v > 0 && v < 100; });
+    const sum = (arr, k) => arr.reduce((a, e) => a + ((k === 'ms' ? c.ms(e.eid) : c.get(e.eid, k)) || 0), 0);
+    if (zero.length) out.push(`draws with 0 ${px}: ${zero.length} (${fmtMs(sum(zero, 'ms'))} ms = ${fmtPct((sum(zero, 'ms') / total) * 100)}${c.hasMetric('verts') ? `, ${fmtNum(sum(zero, 'verts'))} verts` : ''}) — occluded/culled late, depth-only, or off-screen work`);
+    if (tiny.length) out.push(`draws with <100 ${px}: ${tiny.length} (${fmtMs(sum(tiny, 'ms'))} ms = ${fmtPct((sum(tiny, 'ms') / total) * 100)})`);
+  }
+  const scr = c.screenPixels();
+  const ps = draws.reduce((a, e) => a + (c.get(e.eid, 'ps') || 0), 0);
+  if (scr && ps) out.push(`ps invocations = ${(ps / scr).toFixed(2)}× the largest render target (${fmtNum(scr)} px)`);
+  return out;
 }
 
 function derived(c, eid) {
@@ -223,7 +239,12 @@ function derived(c, eid) {
     if (px > 0) d.push(`ps invocations / viewport pixels = ${(v.ps / px).toFixed(2)} (≈ shaded-pixel coverage incl. overdraw; quads/MSAA inflate it)`);
   }
   if (ms && v.ps) d.push(`ns per ps invocation = ${((ms * 1e6) / v.ps).toFixed(3)}`);
-  if (v.rastPrims !== undefined && v.ps) d.push(`ps invocations per rasterized primitive = ${(v.ps / Math.max(1, v.rastPrims)).toFixed(1)}`);
+  if (v.rastPrims && v.ps !== undefined) {
+    const ppt = v.ps / v.rastPrims;
+    const line = `shaded pixels per rasterized triangle = ${ppt.toFixed(2)}`;
+    if (ppt < 1 && v.rastPrims > 10000) d.unshift(line + '  <-- MICRO-TRIANGLES: geometry far denser than its screen size (vertex/raster/quad-overshading bound; LOD problem). ns per pixel is misleading here');
+    else d.push(line);
+  }
   if (v.verts && v.vs !== undefined) d.push(`vs invocations / input vertices = ${(v.vs / v.verts).toFixed(2)} (<1 = post-transform cache reuse)`);
   if (v.samples !== undefined && v.ps) d.push(`samples passed / ps invocations = ${(v.samples / v.ps).toFixed(2)}`);
   if (v['smsp__inst_executed_shader_ps.sum'] && v.ps) d.push(`ps warp-instructions per ps invocation = ${(v['smsp__inst_executed_shader_ps.sum'] / v.ps).toFixed(2)} (×32 ≈ per-thread instructions if warps were full)`);
@@ -240,7 +261,10 @@ export function event(c, eid) {
   out.push(`path: ${c.markerPathOf(a).join(' > ') || '(root)'}`);
   if (a.children > 0) {
     const ag = c.nodeAgg(a);
-    out.push(`marker: ${a.children} children, ${ag.draws} draws, ${ag.dispatches} dispatches, ${fmtMs(ag.ms)} ms inclusive — use \`tree\`/\`top --in ${eid}\``);
+    const work = ag.events.filter((e) => e.kind === 'draw' || e.kind === 'dispatch');
+    out.push(`marker: ${a.children} children, ${ag.draws} draws, ${ag.dispatches} dispatches, ${fmtMs(ag.ms)} ms inclusive`);
+    if (work.length) out.push(`draws/dispatches inside: ${work.slice(0, 10).map((e) => e.eid).join(', ')}${work.length > 10 ? ` … (+${work.length - 10}; see \`top --in ${eid}\`)` : ''}`);
+    if (work.length === 1) out.push('', event(c, work[0].eid));
     return out.join('\n');
   }
   if (a.kind === 'draw') out.push(`indices/vertices: ${a.indices}  instances: ${a.instances}`);
@@ -251,7 +275,8 @@ export function event(c, eid) {
     out.push('counters: not measured for this event');
   } else {
     const ms = c.ms(eid);
-    out.push(`GPU: ${fmtMs(ms)} ms${frame ? ` (${fmtPct((ms / frame) * 100)} of frame)` : ''}`);
+    const sp = c.spread.get(eid)?.ms;
+    out.push(`GPU: ${fmtMs(ms)} ms${sp ? ` [${fmtMs(sp[0])}–${fmtMs(sp[1])} over repeats]` : ''}${frame ? ` (${fmtPct((ms / frame) * 100)} of frame)` : ''}`);
     const gen = Object.keys(GENERIC_HELP).filter((k) => k !== 'ms' && v[k] !== undefined && v[k] !== 0).map((k) => `${k}=${fmtNum(v[k])}`);
     out.push(`work: ${gen.join('  ') || 'all generic counters zero'}`);
     const vendor = Object.keys(v).filter((k) => !(k in GENERIC_HELP)).sort();
@@ -307,7 +332,7 @@ export function shaderRanking(c, { stages = ['ps', 'cs'], within = null } = {}) 
 }
 
 export function shaderTable(c, rows, frame) {
-  return table(['shader', 'stage', 'ms', '%frame', 'uses', 'threads', 'ns/thread', 'static', 'src', 'name'],
+  return table(['shader', 'stage', 'ms', '%frame', 'uses', 'threads', 'ns/thread', 'static', 'source', 'name'],
     rows.map((r) => {
       const s = c.shaderById.get(r.id) || {};
       return [r.id, r.stage, fmtMs(r.ms), frame ? fmtPct((r.ms / frame) * 100) : '-', r.uses, fmtNum(r.ps),
@@ -323,7 +348,7 @@ export function shaders(c, opts = {}) {
   if (!rows.length) return c.shaders.length ? 'No shaders used by measured draws in this scope.' : 'No shader data (case opened with --no-state?).';
   const out = [shaderTable(c, rows.slice(0, opts.n || 25), c.frameMs())];
   out.push('ms = summed GPU time of every draw/dispatch using the shader; a draw counts for each of its stages, so do not add ps+vs rows.');
-  out.push('threads = ps or cs invocations; static = disassembly text stats (instr slots for DXBC, else non-comment lines).');
+  out.push('threads = ps or cs invocations; static = disassembly text stats (instr slots for DXBC, else non-comment lines); source: yes = embedded, /Od = compiled without optimisation.');
   return out.join('\n');
 }
 

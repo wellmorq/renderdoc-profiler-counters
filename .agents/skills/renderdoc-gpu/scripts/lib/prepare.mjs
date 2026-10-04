@@ -50,7 +50,7 @@ export async function openCapture(capture, opts) {
   if (!opts.noState && !opts.noShaders) tasks.push({ type: 'shaders', sources: true });
 
   const t0 = Date.now();
-  const result = await runJob(path.join(dir, 'jobs', `open-${stamp()}`), { capture: abs, tasks }, { out: dir, timeoutSec: opts.timeout, host: opts.host });
+  const result = await runJob(path.join(dir, 'jobs', `open-${stamp()}`), { capture: abs, tasks }, { out: dir, timeoutSec: opts.timeout, host: opts.host, quiet: opts.quiet, verbose: opts.verbose });
   if (result.error && !(result.tasks || []).some((t) => t.type === 'actions' && t.ok)) {
     throw new Error(`Extraction failed: ${result.error}\n${result.traceback || ''}`);
   }
@@ -73,7 +73,7 @@ export async function fetchCounters(target, spec, opts) {
   const c = loadCase(target);
   const task = counterTask(spec, { repeat: opts.repeat, label: opts.label });
   const result = await runJob(path.join(c.dir, 'jobs', `fetch-${stamp()}`), { capture: c.meta.capture, tasks: [task] },
-    { out: c.dir, timeoutSec: opts.timeout, host: opts.host });
+    { out: c.dir, timeoutSec: opts.timeout, host: opts.host, quiet: opts.quiet, verbose: opts.verbose });
   if (result.error) throw new Error(`fetch failed: ${result.error}`);
   const r = taskResult(result, 'counters');
   const meta = c.meta;

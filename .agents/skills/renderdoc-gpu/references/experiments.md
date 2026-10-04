@@ -5,7 +5,7 @@
 ## Workflow
 
 ```
-S source <rdc> <eid> [--stage ps|vs|cs]        # writes <rdc>.rdgpu/edit/eid<E>-<stage>/original/ (+ meta.json)
+S source <rdc> <eid> [--stage ps|vs|cs]        # writes <cache>/edit/eid<E>-<stage>/original/ (+ meta.json); prints the paths
 S source <rdc> <eid> --as fewer_taps            # editable copy per variant; edit its main file only
 S experiment <rdc> <eid> --stage ps --variant fewer_taps=<path printed by source> [--variant b=...] [--repeat 5] [--images]
 ```
@@ -18,22 +18,24 @@ S experiment <rdc> <eid> --stage ps --variant fewer_taps=<path printed by source
 ## Reading the result
 
 ```
-variant          eid 575   users   frame  Δ vs captured  Δ vs original  px changed
-captured   68.18 [65–70]   99.89  588.39           0.0%          -3.9%          0%
-original   65.35 [62–68]  103.97  596.27           4.1%                         0%
-taps3      8.48 [7.5–9.6]  12.96  475.63         -87.0%         -87.5%     12.4%
+variant                  eid 575  all users  Δ users vs original  significant  image vs captured
+captured  439.02 [431.62–440.35]     660.28                -6.9%  yes          0%
+original  449.16 [444.49–488.93]     709.55                                    0%
+step2     128.37 [122.51–130.82]     192.14               -72.9%  yes          10.679% max 0.007721 mean 0.0000473 psnr 66dB
+per event (median):  eid 575  eid 584  eid 593  eid 602 ...
 ```
 
 - `captured` = the shader as it was in the capture; `original` = its source recompiled by RenderDoc. **Judge variants against `original`** (same compiler, same flags). A large captured↔original gap means the compiler/flags differ (e.g. `/Od` capture) — mention it.
-- `eid N` = median [min–max] over `--repeat` replays of the chosen event. Overlapping ranges = no proven difference; raise `--repeat`.
-- `users` = sum over every event that uses this shader (the replacement affects all of them); `frame` = whole replay total.
-- `px changed` = share of render-target-0 texels after this event that differ from the captured output. 0% = identical image. Any non-zero value means the variant changes what is drawn: look at the images (`--images`, then open the PNGs) and describe the visual cost of the optimisation. A variant that writes nothing can still show 0% because the target keeps its previous contents — another reason to look at images when the speed-up is suspiciously large.
+- `eid N` = median [min–max] over `--repeat` replays. `significant` = `yes` when the min–max ranges of the variant and the baseline don't overlap; otherwise raise `--repeat` (5 default; 7–9 on noisy machines) before claiming anything.
+- `all users` = sum over every event that uses this shader (the replacement affects all of them); the per-event table shows each one.
+- `image vs captured` = render target 0 after this event versus the captured output: % of texels that changed, the largest and the mean absolute per-channel error (linear float values; 1.0 = white for 8-bit targets, HDR targets can exceed 1) and PSNR. Rough guide for 8-bit-visible results: max < 0.004 (1/255) invisible, PSNR > 50 dB visually identical, < 35 dB likely visible. Look at `--images` PNGs when it matters; dark/HDR targets can look black in PNG — rely on the numbers then. A variant that writes nothing can show 0% because the target keeps its previous contents.
 - Compiler warnings/errors are printed per variant; a failed compile shows `FAILED` with the first lines of the error.
 
 ## Good experiments
 
 - Remove or reduce one thing per variant (taps, loop count, a texture fetch, a branch) so the delta is attributable.
-- To prove "this part of the shader is the cost": a variant with that part replaced by a constant, and check `px changed` to see what it affected.
+- To prove "this part of the shader is the cost": a variant with that part replaced by a constant, and check `image vs captured` to see what it affected.
+- **Geometry or pixel cost?** Make a `--as null` copy whose pixel shader body only writes a constant colour (keep the signature and outputs: HLSL `return float4(0,0,0,1);`, GLSL `outColor = vec4(0,0,0,1);`). If the event barely gets faster, the cost is vertex/raster (geometry density, micro-triangles); if it collapses, it is the pixel shader. Then remove one feature at a time (texture fetch, light loop, shadow sampling) to find which part costs.
 - To estimate a quality/perf trade-off: two or three settings (e.g. 25/13/9 taps) in one run.
 - To test whether optimisation flags matter: the same source with `--flags-remove /Od` vs without (two runs).
 - Report: what changed (diff summary), ms before/after for the event and users, % vs original, visual impact, and how to port it to the project file.

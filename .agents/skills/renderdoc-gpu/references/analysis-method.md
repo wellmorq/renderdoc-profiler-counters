@@ -31,7 +31,7 @@ Pick the denominator that matches the dominant stage. Don't divide whole-pass DR
 2. Check comparability first: WARNING lines (API, vendor, resolution, counter sets), `topology:` line (markers added/removed → parent totals cover different events).
 3. `compare <before> <after> <marker>` for the region that moved most → REGION table + "reading".
 4. Classify: work changed (`ps`, `verts`, draws), per-item cost changed (ms per item, `code CHANGED`, static stats, constants via `draw` on both), or efficiency changed (caches/stalls with same work).
-5. `shader code same` but cost up → data-driven change (constants, textures, resolution, overdraw): run `draw` on the same event in both captures and diff the constant values/texture sizes.
+5. `code same` but cost up → data-driven change (constants, textures, resolution, overdraw): `compare` prints `SAME WORK, DIFFERENT COST` lines with a ready `drawdiff <before> <after> <eid>` command; it lists only the constants, texture bindings/sizes, targets and pipeline state that differ (e.g. `_BlurTaps 9 → 25`, `_AdditionalLightsCount 4 → 24`). Loop-bound shaders (static stats show `loop`) are the first suspects.
 
 ## 4. Evidence discipline
 
@@ -52,3 +52,6 @@ Pick the denominator that matches the dominant stage. Don't divide whole-pass DR
 | shader `/Od` in top list | Unity debug pragma left on | recapture without it or `experiment --flags-remove /Od` |
 | same work, higher ms, lower hit rates | texture size/format/sampling pattern | `draw` texture sizes/formats in both captures |
 | many tiny draws (≪0.01 ms each) adding up | draw-call/state overhead, missing batching/instancing | count in `tree`, GPU idle gaps are not visible here |
+| `tree` footer: many draws with 0 samples/pixels | objects fully occluded or off-screen still submitted (no occlusion culling, too-far camera range) | count/time/vertices of those draws; Unity: Occlusion Culling / GPU Resident Drawer settings |
+| depth prepass and GBuffer with the same vertex counts | geometry processed twice; prepass only pays off with heavy overdraw | `tree <prepass> --metrics @work` vs `tree GBuffer --metrics @work`; prepass `ps` ≫ screen pixels = alpha-tested materials in prepass |
+| `MICRO-TRIANGLES` in `event` | mesh far denser than its screen size | LOD settings; `experiment` with a constant pixel shader barely helps |

@@ -118,6 +118,17 @@ export function compare(A, B, marker, opts = {}) {
   const expl = shown.filter((r) => r.sa && r.sb && r.d === Math.min(...shown.map((s) => s.d)) + (marker ? 0 : 1)).slice(0, 4)
     .map((r) => explain(segs(r.k).pop(), r.sa, r.sb, metrics)).filter(Boolean);
   if (expl.length) out.push('', 'WORK vs COST (top changed markers):', ...expl.map((e) => '  ' + e));
+  // same work but different cost -> the per-item cost changed: point at the heaviest event to diff
+  const hints = [];
+  for (const r of shown.filter((x) => x.sa && x.sb && x.sa.ms && Math.abs(x.delta) / x.sa.ms > 0.1)) {
+    const same = metrics.every((m) => { const a = r.sa.ag[m]?.v; const b = r.sb.ag[m]?.v; return !a || (b !== null && Math.abs(b / a - 1) < 0.03); });
+    if (!same) continue;
+    const evB = B.workUnder(r.y.a).filter((e) => e.kind === 'draw' || e.kind === 'dispatch').sort((p, q) => (B.ms(q.eid) || 0) - (B.ms(p.eid) || 0))[0];
+    const evA = evB && A.workUnder(r.x.a).find((e) => e.name === evB.name && e.eid === evB.eid) ? evB.eid : null;
+    if (evB && !hints.some((h) => h.includes(`@${evB.eid}`))) hints.push(`  ${trunc(r.k.split(SEP).pop(), 50)}: same work, ${fmtDelta(r.sa.ms, r.sb.ms)} time -> drawdiff <A> <B> ${evA ?? '<eid in A>'} ${evB.eid}   (heaviest event @${evB.eid})`);
+    if (hints.length >= 4) break;
+  }
+  if (hints.length) out.push('', 'SAME WORK, DIFFERENT COST — diff constants/textures/state of the heaviest event (live):', ...hints);
 
   // shaders
   const shA = shaderRanking(A, { stages: ['ps', 'cs', 'vs'], within: marker ? rootsA.flatMap((n) => A.workUnder(n)) : null });

@@ -19,7 +19,7 @@ SETUP
   doctor [--capture <rdc>]            check RenderDoc, headless Python host, Nsight Perf SDK, counters
   setup-nvperf [--from <zip|dir|dll>] install nvperf_grfx_host for RenderDoc's NVIDIA counters
 
-PREPARE (runs RenderDoc once, caches everything next to the capture as <capture>.rdgpu/)
+PREPARE (replays the .rdc once into a working cache; later queries are instant)
   open <rdc> [--counters <sets>] [--repeat N] [--no-state] [--no-shaders] [--state-limit N] [--force]
   fetch <rdc> <sets|names|re:regex> [--repeat N]   add counters to a prepared case
 
@@ -37,6 +37,7 @@ QUERY (offline, instant)
 
 LIVE (replays the capture; seconds to minutes)
   draw <rdc> <eid> [--all]            constant-buffer values, texture slots, targets
+  drawdiff <a.rdc> <b.rdc> <eid> [eid-in-b]   what differs for the same event in two captures (constants, textures, state)
   rt <rdc> <eid> [--depth|--all]      save render target(s) after the event as PNG
   usage <rdc> <resource-id>           which events read/write a resource
   source <rdc> <eid> [--stage ps] [--as name]     dump the shader's embedded source; --as makes a named editable copy
@@ -48,9 +49,10 @@ COUNTER SETS for --counters / fetch (comma separated; also exact names or re:<re
 ${presetHelp()}
   default for open: generic,nv-pack (vendor sets resolve to nothing on other GPUs)
 
-COMMON  --json (where supported) --timeout <sec> --host qrenderdoc|python
+COMMON  --timeout <sec>  --host qrenderdoc|python  -q/--quiet (no RenderDoc progress on stderr)  --verbose
+        Results go to stdout, RenderDoc progress to stderr: don't merge them (no 2>&1) when you parse output.
 ENV     RDGPU_RENDERDOC=<qrenderdoc dir>  RENDERDOC_PYTHON_PATH=<dir with renderdoc module> RDGPU_PYTHON=<python>
-        RDGPU_CASES=<dir> to keep caches outside the capture folder
+        RDGPU_CASES=<dir> working-cache root (default %LOCALAPPDATA%\\rdgpu\\cache or ~/.cache/rdgpu)
 CONFIG  ${configPath()}  {"renderdoc": "...", "cases": "...", "env": {...}} (env vars win)`;
 
 const OPTIONS = {
@@ -88,6 +90,7 @@ const OPTIONS = {
   as: { type: 'string' },
   resource: { type: 'string' },
   verbose: { type: 'boolean' },
+  quiet: { type: 'boolean', short: 'q' },
   help: { type: 'boolean', short: 'h' },
 };
 
@@ -105,7 +108,7 @@ async function main() {
   const { values: o, positionals: p } = parseArgs({ args: fixed, options: OPTIONS, allowPositionals: true, strict: true });
   const [cmd, ...args] = p;
   if (!cmd || o.help || cmd === 'help') { console.log(HELP); return; }
-  const common = { timeout: o.timeout ? Number(o.timeout) : undefined, host: o.host, verbose: o.verbose };
+  const common = { timeout: o.timeout ? Number(o.timeout) : undefined, host: o.host, verbose: o.verbose, quiet: o.quiet };
   const need = (n, what) => { if (args.length < n) throw new Error(`usage: ${cmd} ${what}`); };
   const out = (s) => process.stdout.write(s.endsWith('\n') ? s : s + '\n');
 
@@ -173,6 +176,11 @@ async function main() {
       need(2, '<capture> <shader-id> --project <dir>');
       if (!o.project) throw new Error('--project <unity project or shader source root> is required');
       out(findSource(loadCase(args[0]), args[1], o.project, { n: num(o.n, 8) }));
+      return;
+    }
+    case 'drawdiff': {
+      need(3, '<a.rdc> <b.rdc> <eid> [eid-in-b]');
+      out(await live.drawdiff(loadCase(args[0]), loadCase(args[1]), Number(args[2]), Number(args[3] || args[2]), { ...common, all: o.all }));
       return;
     }
     case 'draw': need(2, '<capture> <eid>'); out(await live.draw(loadCase(args[0]), Number(args[1]), { ...common, all: o.all })); return;

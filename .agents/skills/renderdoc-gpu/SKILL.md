@@ -9,11 +9,13 @@ All work goes through one CLI. `S` below means `node <dir of this SKILL.md>/scri
 
 ```
 S doctor --capture <file.rdc>      # once per machine/session: RenderDoc found? counters available?
-S open <file.rdc>                  # replays once (seconds–minutes), caches to <file.rdc>.rdgpu/, prints a summary
+S open <file.rdc>                  # replays once (seconds–minutes), builds a working cache, prints a summary
 S tree|top|event|shaders|shader|find|metrics|compare ...   # instant, offline, from the cache
-S draw|rt|source|experiment|usage ...                        # replay again for one question
+S draw|drawdiff|rt|source|experiment|usage ...             # replay the .rdc again for one question
 ```
-Run `S` without arguments for the full command list. Every command takes the `.rdc` path (or the case dir). Read command output; do not open the cache JSON files unless a command lacks something.
+The `.rdc` is the only input and the source of truth. The cache (`%LOCALAPPDATA%\rdgpu\cache`, Linux `~/.cache/rdgpu`) is derived from it, rebuilt automatically when the file changes, and holds the shader dumps/edits/images you create. Every command takes the `.rdc` path. Run `S` without arguments for the full command list. Read command output; don't open cache JSON files unless a command lacks something.
+
+Results go to stdout, RenderDoc progress to stderr — don't merge them (`2>&1`) when you save or diff output; add `-q` to silence progress. Live commands take seconds; `experiment` can take minutes (≈ (variants + 2) × `--repeat` replays): give it a long timeout or run it in the background.
 
 ## 1. Setup (only when needed)
 
@@ -27,12 +29,14 @@ Run `S` without arguments for the full command list. Every command takes the `.r
 | Question | Commands, in order |
 |---|---|
 | "What is slow / where does the frame go?" | `open` → `tree <rdc> . --depth 2` → `top <rdc> --in <pass>` → `event <rdc> <eid>` → `shaders <rdc>` |
-| "Why is pass/draw X slow?" | `tree <rdc> X --metrics ps,verts` → `event` on its top events → `draw <rdc> <eid>` for constants/textures → counters (§3) |
+| "Why is pass/draw X slow?" | `tree <rdc> X --metrics @work` (footer: draw-time distribution, draws with 0 pixels) → `event` on its top events → `draw <rdc> <eid>` for constants/textures → counters (§3) |
 | "Which shader costs most / where is its code?" | `shaders <rdc>` → `shader <rdc> <id>` → `find-source <rdc> <id> --project <path>` |
 | "What does this pass render?" | `rt <rdc> <eid>` → open the PNG (your file/image viewing tool) |
-| "Before vs after — what regressed?" | `open` both → `compare <before> <after>` → `compare <before> <after> <marker>` → `event`/`draw` in both |
-| "Would change Y make it faster?" | `source <rdc> <eid>` → copy + edit → `experiment <rdc> <eid> --variant name=<file>` — read [references/experiments.md](references/experiments.md) first |
+| "Before vs after — what regressed?" | `open` both → `compare <before> <after>` → for "SAME WORK, DIFFERENT COST" lines run the printed `drawdiff <before> <after> <eid>` (changed constants/textures/state) → `compare <before> <after> <marker>` for details |
+| "Would change Y make it faster?" / "is it geometry or pixel cost?" | `source <rdc> <eid> --as <name>` (editable copy) → edit its main file → `experiment <rdc> <eid> --variant <name>=<file>` — read [references/experiments.md](references/experiments.md) first |
 | Need a counter that is not collected | `metrics <rdc> <text>` (shows available ones) → `fetch <rdc> <names or preset>` |
+
+`--metrics` / `--by` accept full counter names, the short names printed in table headers (`ps`, `verts`, `dramRd`, `L1hit%`, `stall_long_scoreboard%`, `inst_ps`), and groups: `@work` (pixels, vertices, primitives, samples, threads), `@memory` (DRAM bytes, L1/L2 hit), `@inst` (instructions per stage), `@stalls` (the 3 largest stall reasons in that region).
 
 Narrowing rule: go frame → pass (marker) → top events → one event → its shader. Stop when the evidence answers the question. Prefer `--in`, `-n`, `--depth` over dumping everything.
 
@@ -47,13 +51,17 @@ Names: markers come from the engine (Unity: `RenderLoop.Draw`, `DrawOpaqueObject
 - A counter that was not fetched is unknown, not zero. Check `metrics` before claiming "no X".
 - Shaders marked `/Od` or `compiled WITHOUT optimisation` (Unity debug pragma) are slower than in the shipped game; say this whenever such a shader is in your top list.
 - Explain cost in three layers: **more work** (draws, vertices, pixels = `ps`, threads), **more work per item** (instructions, texture fetches, bytes per item), **less efficient execution** (cache hit rates, stalls). Lead with the work explanation in plain words; stall names come last. Method and NVIDIA counter meanings: [references/analysis-method.md](references/analysis-method.md), [references/counters.md](references/counters.md).
-- `ps / viewport pixels` from `event` ≈ how many times each screen pixel was shaded by that draw (overdraw/coverage). Fullscreen passes ≈ 1.0.
+- `ps / viewport pixels` from `event` ≈ how many times each screen pixel was shaded by that draw (overdraw/coverage). Fullscreen passes ≈ 1.0. `MICRO-TRIANGLES` (<1 shaded pixel per triangle) means the cost is geometry density, not the pixel shader — don't read `ns per ps invocation` as shader cost then.
+- `tree` footer for a marker: draw-time percentiles and how much time goes to draws that produce **0 pixels** (occluded/off-screen work) — a common Unity finding (missing occlusion culling, duplicate depth prepass).
+- `WARNING replay GPU is a SOFTWARE rasterizer` (or `DEGRADED`): relative numbers only; clears and texture-heavy events are distorted. Say so in the answer.
+- Repeats: `--repeat N` on `open`/`fetch`/`experiment` stores min–max; `event` shows the range. When ranges of two things overlap, the difference is not proven.
 
 ## 4. Shader source
 
 - `shader <rdc> <id>` shows whether the capture embeds source (`embedded source`) and where the disassembly is. Grep the disassembly file instead of reading it whole.
 - No embedded source (normal for Unity release shaders): use `find-source <rdc> <id> --project <unity project root>`; it ranks project/package shader files by the shader's cbuffer, texture and entry names. Ask the user for the project path if you don't know it (see §6). Unity pragmas to embed source and the `/Od` caveat: [references/unity-shaders.md](references/unity-shaders.md).
-- When you quote code, say whether it is from the embedded source, a project file match (probable), or disassembly.
+- When you quote code, say whether it is from the embedded source, a project file match (probable), or disassembly. Embedded source is the compiled language of the capture (HLSL for D3D, GLSL/SPIR-V for GL/Vulkan) and already preprocessed; map changes back to the project `.shader`/`.hlsl` yourself.
+- A match under `Library/PackageCache/` (URP/HDRP) is read-only: propose the change in a copy (embedded package in `Packages/` or a custom shader in `Assets/`), never in the cache.
 
 ## 5. Output contract
 
@@ -79,5 +87,5 @@ Ask when: several `.rdc` files and no indication which; NVIDIA counters needed b
 
 - Don't infer the game's frame time, CPU cost, or what changed in the code/assets from GPU counters alone.
 - Don't call a draw "vertex bound"/"ROP bound" without the counters that show it; describe the work first.
-- Don't present a shader experiment as a win without checking `px changed` (output must stay the same) and comparing against the `original` row.
+- Don't present a shader experiment as a win without the `image vs captured` column (how many texels changed and by how much — PSNR/max error) and the `significant` column, comparing against the `original` row.
 - Don't re-run `open` to "refresh": the cache is reused automatically; use `--force` only after re-capturing or installing the Nsight Perf SDK.

@@ -57,7 +57,7 @@ export async function runJob(jobDir, job, opts = {}) {
   }
 
   const timeoutMs = (opts.timeoutSec || 1800) * 1000;
-  const quiet = opts.quiet;
+  const quiet = opts.quiet || process.env.RDGPU_QUIET === '1';
   const started = Date.now();
   let offset = 0;
   let partial = '';
@@ -74,7 +74,11 @@ export async function runJob(jobDir, job, opts = {}) {
           const text = partial + buf.toString('utf8');
           const lines = text.split('\n');
           partial = lines.pop();
-          for (const l of lines) process.stderr.write(`  rd| ${l}\n`);
+          for (const l of lines) {
+            // condensed by default: drop per-percent loading and per-100 state lines unless --verbose
+            if (!opts.verbose && /loading capture (?!100%)\d+%|\] state \d+\/\d+ |^\[[^\]]*\]\s+done in |fetching counters \d+-/.test(l)) continue;
+            process.stderr.write(`  rd| ${l}\n`);
+          }
         }
       }
     } catch { /* not yet created */ }

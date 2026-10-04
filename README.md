@@ -2,7 +2,7 @@
 
 An agent skill + CLI for analysing RenderDoc GPU captures (`.rdc`) without the RenderDoc UI: where frame time goes, NVIDIA Nsight Perf hardware counters, pipeline state and constant values, shader source/disassembly, before/after regressions, and shader-edit experiments measured in replay.
 
-It drives the RenderDoc you already have installed: every replay step runs headless inside `qrenderdoc --python`, so nothing has to be built. Results are cached next to the capture (`<capture>.rdc.rdgpu/`) and all analysis queries are instant afterwards.
+It drives the RenderDoc you already have installed: every replay step runs headless inside `qrenderdoc --python`, so nothing has to be built. The `.rdc` is the only input; what the CLI extracts from it is kept in a working cache (`%LOCALAPPDATA%\rdgpu\cache`, Linux `~/.cache/rdgpu`, override with `RDGPU_CASES`) so follow-up queries are instant, and live commands replay the `.rdc` again when they need RenderDoc.
 
 ## Install the skill
 

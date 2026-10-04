@@ -1,6 +1,7 @@
 // Case = the cached extraction of one capture. Loading, metrics and aggregation.
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 export const CASE_VERSION = 1;
@@ -32,11 +33,17 @@ export function caseDirFor(target) {
   const abs = path.resolve(target);
   if (fs.existsSync(path.join(abs, 'case.json'))) return abs;
   if (/\.rdc$/i.test(abs)) {
-    const root = process.env.RDGPU_CASES;
-    if (root) return path.join(path.resolve(root), path.basename(abs) + '.' + sha1(abs).slice(0, 8));
-    return abs + '.rdgpu';
+    // Working cache derived from the .rdc (the .rdc stays the source of truth); kept out of the user's folders.
+    const key = process.platform === 'win32' ? abs.toLowerCase() : abs;
+    return path.join(cacheRoot(), path.basename(abs, path.extname(abs)) + '-' + sha1(key).slice(0, 10));
   }
   throw new Error(`Not a capture (.rdc) or prepared case directory: ${target}`);
+}
+
+export function cacheRoot() {
+  if (process.env.RDGPU_CASES) return path.resolve(process.env.RDGPU_CASES);
+  if (process.platform === 'win32') return path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'rdgpu', 'cache');
+  return path.join(process.env.XDG_CACHE_HOME || path.join(os.homedir(), '.cache'), 'rdgpu');
 }
 
 export function captureStamp(capture) {
@@ -61,6 +68,18 @@ export function counterKind(name, unit) {
 
 export function isNanoCounter(name) {
   return /^gpu__time_(duration|active)\.(sum|avg|max|min)$/.test(name);
+}
+
+export function shortMetric(k) {
+  return k
+    .replace(/^smsp__warp_issue_stalled_(.*)_per_warp_active\.avg\.pct$/, 'stall_$1%')
+    .replace(/^smsp__inst_executed_shader_(\w+)\.sum$/, 'inst_$1')
+    .replace(/^sm__inst_executed\.sum$/, 'inst')
+    .replace(/^dram__bytes_op_read\.sum$/, 'dramRd')
+    .replace(/^dram__bytes_op_write\.sum$/, 'dramWr')
+    .replace(/^l1tex__t_sector_hit_rate\.avg\.pct$/, 'L1hit%')
+    .replace(/^lts__t_sector_hit_rate\.avg\.pct$/, 'L2hit%')
+    .replace(/^gpu__time_duration\.sum$/, 'nvTime_ns');
 }
 
 export class Case {
@@ -88,11 +107,18 @@ export class Case {
     this.values = new Map(); // eid -> {key: value}
     this.units = {}; // key -> unit
     this.counterSources = [];
-    const files = fs.existsSync(this.dir) ? fs.readdirSync(this.dir).filter((f) => /^counters-.*\.json$/.test(f)).sort() : [];
+    const files = fs.existsSync(this.dir) ? fs.readdirSync(this.dir).filter((f) => /^counters-.*\.json$/.test(f))
+      .map((f) => ({ f, t: fs.statSync(path.join(this.dir, f)).mtimeMs })).sort((a, b) => a.t - b.t).map((x) => x.f) : [];
+    this.spread = new Map(); // eid -> {key: [min,max]} from repeated runs
     for (const f of files) {
       const c = readJson(path.join(this.dir, f));
       if (!c || !c.counters) continue;
       this.counterSources.push({ file: f, label: c.label, counters: c.counters.length, missing: c.missing || [], repeat: c.repeat });
+      for (const [eid, sp] of Object.entries(c.spread || {})) {
+        const o = this.spread.get(Number(eid)) || {};
+        for (const [n, mm] of Object.entries(sp)) o[this.keyFor(n)] = c.units?.[c.counters.indexOf(n)] === 'Seconds' ? mm.map((x) => x * 1000) : mm;
+        this.spread.set(Number(eid), o);
+      }
       const keys = c.counters.map((n) => this.keyFor(n));
       c.counters.forEach((n, i) => { this.units[keys[i]] = this.unitOf(n, c.units?.[i]); });
       for (const row of c.data) {
@@ -132,14 +158,36 @@ export class Case {
     if (this.hasMetric(spec)) return spec;
     const keys = this.metricKeys();
     const lower = spec.toLowerCase();
-    const exact = keys.find((k) => k.toLowerCase() === lower);
+    const exact = keys.find((k) => k.toLowerCase() === lower) || keys.find((k) => shortMetric(k).toLowerCase() === lower);
     if (exact) return exact;
     const alias = { duration: 'ms', time: 'ms', 'gpu duration': 'ms', pixels: 'ps', vertices: 'verts' }[lower];
     if (alias && this.hasMetric(alias)) return alias;
     const subs = keys.filter((k) => k.toLowerCase().includes(lower));
     if (subs.length === 1) return subs[0];
     if (subs.length > 1) throw new Error(`Metric "${spec}" is ambiguous: ${subs.slice(0, 8).join(', ')}${subs.length > 8 ? ', …' : ''}`);
-    throw new Error(`Metric "${spec}" was not collected. Collected: ${keys.slice(0, 20).join(', ')}${keys.length > 20 ? ', …' : ''}. Use \`fetch\` to collect more.`);
+    throw new Error(`Metric "${spec}" was not collected. Collected (short names work too): ${keys.map(shortMetric).slice(0, 30).join(', ')}${keys.length > 30 ? ', …' : ''}. Groups: @work @memory @stalls @inst. Use \`metrics <rdc> <text>\` / \`fetch\` for others.`);
+  }
+
+  // Expand a --metrics list: names, short names, or groups (@work, @memory, @stalls, @inst).
+  expandMetrics(list, events = null) {
+    const out = [];
+    const add = (k) => { if (k && !out.includes(k)) out.push(k); };
+    for (const raw of list) {
+      const m = String(raw).trim();
+      if (!m) continue;
+      if (m === '@work') { for (const k of ['ps', 'verts', 'rastPrims', 'samples', 'cs']) if (this.hasMetric(k)) add(k); continue; }
+      if (m === '@memory') { for (const k of this.metricKeys().filter((k) => /^(dram__bytes_op_(read|write)\.sum|l1tex__t_sector_hit_rate\.avg\.pct|lts__t_sector_hit_rate\.avg\.pct)$/.test(k))) add(k); continue; }
+      if (m === '@inst') { for (const k of this.metricKeys().filter((k) => /^(sm__inst_executed\.sum|smsp__inst_executed_shader_\w+\.sum)$/.test(k))) add(k); continue; }
+      if (m === '@stalls') {
+        const st = this.metricKeys().filter((k) => /^smsp__warp_issue_stalled_.*_per_warp_active\.avg\.pct$/.test(k) && !/_(not_selected|selected)_/.test(k));
+        const evs = events || this.frameEvents();
+        const ag = this.aggregate(evs, st);
+        st.sort((a, b) => (ag[b].v || 0) - (ag[a].v || 0)).slice(0, 3).forEach(add);
+        continue;
+      }
+      add(this.resolveMetric(m));
+    }
+    return out;
   }
 
   timeKey() {
@@ -198,6 +246,16 @@ export class Case {
   markerPathOf(a) {
     const p = this.pathOf(a);
     return p.slice(0, -1);
+  }
+
+  // Largest colour render target used by any draw (≈ screen/back-buffer resolution).
+  screenPixels() {
+    let best = 0;
+    for (const st of this.state.values()) for (const r of st.rts || []) {
+      const t = this.textures.get(r) || this.resources[String(r)];
+      if (t && t.w && t.h) best = Math.max(best, t.w * t.h);
+    }
+    return best || null;
   }
 
   frameEvents() { return this.actions.filter((a) => WORK_KINDS.has(a.kind)); }

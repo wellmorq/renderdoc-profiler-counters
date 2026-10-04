@@ -114,6 +114,12 @@ test('query commands render on a synthetic case', () => {
   r = cli(['tree', d, 'Camera', '--metrics', 'ps,l1tex']);
   assert.equal(r.code, 0, r.err);
   assert.match(r.out, /~81/);
+  r = cli(['tree', d, 'Opaque', '--metrics', 'L1hit%,@work']);
+  assert.equal(r.code, 0, r.err);
+  assert.match(r.out, /L1hit%/);
+  assert.match(r.out, /draws: 2, p50/);
+  r = cli(['event', d, '5']);
+  assert.match(r.out, /draws\/dispatches inside: 6/);
   r = cli(['top', d, '--in', 'Opaque', '-n', '1']);
   assert.match(r.out, /^\s*4\s/m);
   r = cli(['event', d, '6']);
@@ -231,8 +237,8 @@ assert m.safe_rel("C:\\\\Users\\\\x\\\\Temp\\\\..\\\\a.hlsl") == "Users/x/Temp/a
 print("ok")`;
   const r = spawnSync('python3', ['-c', code], { encoding: 'utf8' });
   assert.equal(r.status, 0, r.stderr);
-  const v = spawnSync('python3', ['-m', 'vermin', '-q', '--no-tips', '--violations', '-t=3.6-', job], { encoding: 'utf8' });
-  if (v.status !== null && !/No module named vermin/.test(v.stderr)) assert.equal(v.stdout.trim(), '', `vermin: ${v.stdout}`);
+  const v = spawnSync('vermin', ['-q', '--no-tips', '--violations', '-t=3.6-', job], { encoding: 'utf8' });
+  if (v.status !== null && !v.error) assert.equal(v.stdout.trim(), '', `vermin: ${v.stdout}`);
 });
 
 // ---------------------------------------------------------------- live (optional)

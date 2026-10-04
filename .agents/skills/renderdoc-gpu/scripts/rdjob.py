@@ -93,7 +93,7 @@ def import_rd():
             # Windows + Python 3.8+: renderdoc.dll is resolved via explicit DLL dirs only
             for d in (mod_dir, os.path.dirname(mod_dir)):
                 if os.path.isfile(os.path.join(d, "renderdoc.dll")):
-                    os.add_dll_directory(d)
+                    os.add_dll_directory(d)  # novermin (guarded by hasattr)
     import renderdoc as rd  # noqa
     return rd
 
@@ -1021,6 +1021,96 @@ def measure(ctx, descs, eids, repeat):
     return res
 
 
+def texel_layout(ctx, tid):
+    """(struct char, scale, components) for regular formats, or None for packed/compressed ones."""
+    if not hasattr(ctx, "_texobj"):
+        ctx._texobj = dict((rid(t.resourceId), t) for t in ctx.c.GetTextures())
+    t = ctx._texobj.get(tid)
+    if t is None:
+        return None, None
+    f = t.format
+    if ename(getattr(f, "type", "Regular")) != "Regular":
+        return None, t
+    w, n, ct = int(f.compByteWidth), int(f.compCount), ename(f.compType)
+    table = {("Float", 2): ("e", 1.0), ("Float", 4): ("f", 1.0), ("UNorm", 1): ("B", 255.0), ("UNormSRGB", 1): ("B", 255.0),
+             ("UNorm", 2): ("H", 65535.0), ("SNorm", 1): ("b", 127.0), ("SNorm", 2): ("h", 32767.0),
+             ("UInt", 1): ("B", 1.0), ("UInt", 2): ("H", 1.0), ("UInt", 4): ("I", 1.0), ("SInt", 4): ("i", 1.0)}
+    ch = table.get((ct, w))
+    if ch is None:
+        return None, t
+    return (ch[0], ch[1], n), t
+
+
+def decode_texels(ctx, tid, data, limit=4000000):
+    import struct
+    lay, t = texel_layout(ctx, tid)
+    if lay is None:
+        return None
+    ch, scale, n = lay
+    size = struct.calcsize(ch)
+    count = len(data) // size
+    vals = struct.unpack("<%d%s" % (count, ch), data[:count * size])
+    step = 1
+    texels = count // n
+    if texels * n > limit:
+        step = int(texels * n // limit) + 1
+    return {"vals": vals, "n": n, "scale": scale, "step": step, "texels": texels}
+
+
+def compare_texels(ctx, tid, ref, data):
+    a, b = ref["data"], data
+    if len(a) != len(b):
+        return {"target": tid, "changedPct": None, "note": "size differs"}
+    ra = ref.get("vals")
+    if ra is None:
+        # packed format: byte-level comparison only
+        lay, t = texel_layout(ctx, tid)
+        texels = max(1, int(getattr(t, "width", 1)) * int(getattr(t, "height", 1))) if t is not None else 1
+        step = max(1, len(a) // texels)
+        changed = sum(1 for i in range(0, len(a), step) if a[i:i + step] != b[i:i + step])
+        return {"target": tid, "changedPct": round(100.0 * changed / texels, 3), "note": "packed format: error size not computed"}
+    rb = decode_texels(ctx, tid, data)
+    n, scale, step = ra["n"], ra["scale"], ra["step"]
+    va, vb = ra["vals"], rb["vals"]
+    changed = 0
+    checked = 0
+    maxabs = 0.0
+    sumabs = 0.0
+    sumsq = 0.0
+    peak = 0.0
+    for t in range(0, ra["texels"], step):
+        diff = False
+        o = t * n
+        for k in range(n):
+            x = va[o + k] / scale
+            y = vb[o + k] / scale
+            if x != x or y != y:
+                continue
+            d = abs(x - y)
+            if d > 0:
+                diff = True
+                if d > maxabs:
+                    maxabs = d
+                sumabs += d
+                sumsq += d * d
+            if abs(x) > peak:
+                peak = abs(x)
+        checked += 1
+        if diff:
+            changed += 1
+    import math
+    nvals = max(1, checked * n)
+    mse = sumsq / nvals
+    peak = max(peak, 1.0)
+    res = {"target": tid, "changedPct": round(100.0 * changed / max(1, checked), 3),
+           "maxAbs": round(maxabs, 6), "meanAbs": round(sumabs / nvals, 7),
+           "psnr": round(10 * math.log10(peak * peak / mse), 1) if mse > 0 else None,
+           "peak": round(peak, 4)}
+    if step > 1:
+        res["sampled"] = "every %d texels" % step
+    return res
+
+
 def task_experiment(ctx, task):
     rd, c = ctx.rd, ctx.c
     eid = int(task["eid"])
@@ -1034,8 +1124,8 @@ def task_experiment(ctx, task):
     refl = pipe.GetShaderReflection(stage)
     entry_point = pipe.GetShaderEntryPoint(stage) or refl.entryPoint
     # every work action using the same shader is affected by the replacement
-    users = []
-    for x in ctx.work_actions():
+    users = [int(u) for u in (task.get("users") or [])]
+    for x in ([] if users else ctx.work_actions()):
         a = x[0]
         if task.get("scanUsers", True):
             c.SetFrameEvent(a.eventId, False)
@@ -1072,7 +1162,7 @@ def task_experiment(ctx, task):
     ref = {}
 
     def pixels(label):
-        """Raw bytes of render target 0 after the event; compares each variant with the captured output."""
+        """Render target 0 after the event, compared with the captured output: changed texels and error size."""
         try:
             c.SetFrameEvent(eid, True)
             p2 = c.GetPipelineState()
@@ -1081,20 +1171,11 @@ def task_experiment(ctx, task):
                 return None
             tid = res_of(rts[0])
             data = bytes(c.GetTextureData(resource_by_id(ctx, tid), rd.Subresource(0, 0, 0)))
-            ti = tex_info(ctx, tid) or {}
-            texels = max(1, int(ti.get("w", 1)) * int(ti.get("h", 1)))
             if "data" not in ref:
                 ref["data"] = data
-                return {"target": tid, "changedPct": 0.0}
-            a, b = ref["data"], data
-            if len(a) != len(b):
-                return {"target": tid, "changedPct": None, "note": "size differs"}
-            step = max(1, len(a) // texels)
-            changed = 0
-            for i in range(0, len(a), step):
-                if a[i:i + step] != b[i:i + step]:
-                    changed += 1
-            return {"target": tid, "changedPct": round(100.0 * changed / texels, 3)}
+                ref["vals"] = decode_texels(ctx, tid, data)
+                return {"target": tid, "changedPct": 0.0, "maxAbs": 0.0, "meanAbs": 0.0}
+            return compare_texels(ctx, tid, ref, data)
         except Exception as e:
             return {"error": str(e)}
 

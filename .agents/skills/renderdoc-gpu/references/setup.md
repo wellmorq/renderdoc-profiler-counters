@@ -43,7 +43,7 @@ Other vendors: AMD counters (GPA) ship with RenderDoc → `fetch <rdc> amd-all` 
 | `DEGRADED replay` in summary | RenderDoc fell back (e.g. different GPU). Timings and counters are less trustworthy; say so. |
 | Job timed out | `--timeout <sec>` (default 1800). Big frames: `open --state-limit 2000` or `--no-shaders`. |
 | Counter "missing" in a fetch | Not offered for this GPU/API/SDK version. `metrics <rdc> <part of name>` lists what exists. |
-| Wrong `.rdc` cache reused | The cache is keyed by file size+mtime. `open --force` re-extracts. `RDGPU_CASES=<dir>` stores caches outside the capture folder. |
+| Wrong `.rdc` cache reused | The cache is keyed by file size+mtime. `open --force` re-extracts. Cache root: `%LOCALAPPDATA%\rdgpu\cache` (Linux `~/.cache/rdgpu`); `RDGPU_CASES=<dir>` moves it. Deleting it is always safe. |
 
 ## Optional: rdc-cli for interactive debugging
 
