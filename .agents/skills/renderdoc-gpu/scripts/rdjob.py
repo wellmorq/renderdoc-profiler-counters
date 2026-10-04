@@ -1276,11 +1276,96 @@ TASKS = {
 }
 
 
+def run_tasks(ctx, tasks):
+    entries = []
+    for task in tasks:
+        t = time.time()
+        name = task["type"]
+        log("task %s" % name)
+        entry = {"type": name}
+        try:
+            entry["result"] = TASKS[name](ctx, task)
+            entry["ok"] = True
+        except Exception as e:
+            entry["ok"] = False
+            entry["error"] = "%s: %s" % (type(e).__name__, e)
+            entry["traceback"] = traceback.format_exc()[-4000:]
+            log("task %s FAILED: %s" % (name, e))
+            if task.get("required", False):
+                entries.append(entry)
+                raise
+        entry["seconds"] = round(time.time() - t, 2)
+        entries.append(entry)
+    return entries
+
+
+def serve(ctx, job):
+    """Session mode: keep the capture loaded and run jobs dropped into the inbox until idle/stop."""
+    global PROGRESS
+    sdir = job["serve"]["dir"]
+    inbox = os.path.join(sdir, "inbox")
+    if not os.path.isdir(inbox):
+        os.makedirs(inbox)
+    idle = float(job["serve"].get("idle", 900))
+    alive = os.path.join(sdir, "alive.json")
+    stop = os.path.join(sdir, "stop")
+    last = time.time()
+    served = 0
+    main_progress = PROGRESS
+    log("session ready (idle timeout %ds)" % idle)
+    while True:
+        write_json(alive, {"pid": os.getpid(), "t": time.time(), "capture": job["capture"], "served": served, "idle": idle})
+        if os.path.exists(stop) or time.time() - last > idle:
+            break
+        names = sorted(n for n in os.listdir(inbox) if n.endswith(".json"))
+        if not names:
+            time.sleep(0.25)
+            continue
+        path = os.path.join(inbox, names[0])
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                sub = json.load(f)
+        except Exception:
+            time.sleep(0.1)
+            continue
+        os.remove(path)
+        write_json(alive, {"pid": os.getpid(), "t": time.time(), "capture": job["capture"], "served": served, "idle": idle, "busy": True})
+        sub_result = {"ok": False, "tasks": [], "started": time.time(), "host": "session"}
+        try:
+            if not os.path.isdir(sub["out"]):
+                os.makedirs(sub["out"])
+            PROGRESS = open(sub["progress"], "a", encoding="utf-8")
+            log("session job %s" % ", ".join(t["type"] for t in sub["tasks"]))
+            ctx.out = sub["out"]
+            ctx._shaders_seen = None
+            sub_result["tasks"] = run_tasks(ctx, sub["tasks"])
+            sub_result["ok"] = all(x.get("ok") for x in sub_result["tasks"])
+        except Exception as e:
+            sub_result["error"] = "%s: %s" % (type(e).__name__, e)
+            sub_result["traceback"] = traceback.format_exc()[-4000:]
+        finally:
+            sub_result["seconds"] = round(time.time() - sub_result["started"], 2)
+            sub_result["renderdocVersion"] = safe(ctx.rd.GetVersionString, "")
+            if PROGRESS is not None and PROGRESS is not main_progress:
+                log("done")
+                PROGRESS.close()
+            PROGRESS = main_progress
+            write_json(sub["result"], sub_result)
+            served += 1
+            last = time.time()
+    for f in (alive, stop):
+        if os.path.exists(f):
+            os.remove(f)
+    log("session ended after %d job(s)" % served)
+    return {"served": served}
+
+
 # ---------------------------------------------------------------- main
 
 def main():
     global JOB, PROGRESS
-    job_path = os.environ.get("RDGPU_JOB") or (sys.argv[1] if len(sys.argv) > 1 and sys.argv[1].endswith(".json") else None)
+    argv = getattr(sys, "argv", None) or []  # embedded interpreters may not set argv
+    job_path = os.environ.get("RDGPU_JOB") or (argv[1] if len(argv) > 1 and argv[1].endswith(".json") else None)
     if not job_path:
         raise SystemExit(2)
     with open(job_path, "r", encoding="utf-8") as f:
@@ -1304,25 +1389,12 @@ def main():
             return
         cap, controller = open_capture(rd, JOB["capture"], in_ui)
         ctx = Ctx(rd, cap, controller, out)
-        for task in JOB["tasks"]:
-            t = time.time()
-            name = task["type"]
-            log("task %s" % name)
-            entry = {"type": name}
-            try:
-                entry["result"] = TASKS[name](ctx, task)
-                entry["ok"] = True
-            except Exception as e:
-                entry["ok"] = False
-                entry["error"] = "%s: %s" % (type(e).__name__, e)
-                entry["traceback"] = traceback.format_exc()[-4000:]
-                log("task %s FAILED: %s" % (name, e))
-                if task.get("required", False):
-                    result["tasks"].append(entry)
-                    raise
-            entry["seconds"] = round(time.time() - t, 2)
-            result["tasks"].append(entry)
-        result["ok"] = all(x.get("ok") for x in result["tasks"])
+        if JOB.get("serve"):
+            result["tasks"].append({"type": "session", "ok": True, "result": serve(ctx, JOB)})
+            result["ok"] = True
+        else:
+            result["tasks"] = run_tasks(ctx, JOB["tasks"])
+            result["ok"] = all(x.get("ok") for x in result["tasks"])
     except SystemExit:
         raise
     except Exception as e:

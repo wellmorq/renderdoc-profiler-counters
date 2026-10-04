@@ -73,7 +73,7 @@ export async function fetchCounters(target, spec, opts) {
   const c = loadCase(target);
   const task = counterTask(spec, { repeat: opts.repeat, label: opts.label });
   const result = await runJob(path.join(c.dir, 'jobs', `fetch-${stamp()}`), { capture: c.meta.capture, tasks: [task] },
-    { out: c.dir, timeoutSec: opts.timeout, host: opts.host, quiet: opts.quiet, verbose: opts.verbose });
+    { out: c.dir, timeoutSec: opts.timeout, host: opts.host, quiet: opts.quiet, verbose: opts.verbose, sessionDir: path.join(c.dir, 'session') });
   if (result.error) throw new Error(`fetch failed: ${result.error}`);
   const r = taskResult(result, 'counters');
   const meta = c.meta;

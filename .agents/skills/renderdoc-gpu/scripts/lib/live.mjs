@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fmtMs, table, trunc } from './format.mjs';
-import { runJob, taskResult } from './runner.mjs';
+import { runJob, sessionAlive, startSession, stopSession, taskResult } from './runner.mjs';
 
 const stamp = () => new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 
@@ -19,7 +19,7 @@ function requireWork(c, eid) {
 
 async function job(c, name, tasks, opts = {}) {
   const dir = path.join(c.dir, 'jobs', `${name}-${stamp()}`);
-  const res = await runJob(dir, { capture: c.meta.capture, tasks }, { out: opts.out || dir, timeoutSec: opts.timeout, host: opts.host, quiet: opts.quiet, verbose: opts.verbose });
+  const res = await runJob(dir, { capture: c.meta.capture, tasks }, { out: opts.out || dir, timeoutSec: opts.timeout, host: opts.host, quiet: opts.quiet, verbose: opts.verbose, sessionDir: path.join(c.dir, 'session') });
   if (res.error) throw new Error(`${name} failed: ${res.error}\n${res.traceback || ''}`);
   return { res, dir };
 }
@@ -281,4 +281,34 @@ export async function usage(c, resId, opts) {
     return [u.eid, u.usage, a ? trunc(a.name, 40) : '', a ? trunc(c.markerPathOf(a).join(' > '), 60) : ''];
   });
   return `resource ${c.texLabel(resId)} — ${rows.length} uses\n` + table(['eid', 'usage', 'event', 'marker path'], rows.slice(0, opts.n || 60), 'rlll');
+}
+
+export async function session(c, opts) {
+  const sdir = path.join(c.dir, 'session');
+  if (opts.stop) return stopSession(sdir) ? 'session stopping (finishes the running job first)' : 'no session running';
+  const a = sessionAlive(sdir, c.meta.capture);
+  if (a) return `session already running (pid ${a.pid}, ${a.served} job(s) served, idle timeout ${a.idle}s)`;
+  const t0 = Date.now();
+  const { pid } = startSession(sdir, c.meta.capture, { idle: opts.idle, host: opts.host });
+  const deadline = Date.now() + (opts.timeout || 600) * 1000;
+  let offset = 0;
+  const log = path.join(sdir, 'session.log');
+  while (Date.now() < deadline) {
+    if (!opts.quiet) {
+      try {
+        const st = fs.statSync(log);
+        if (st.size > offset) {
+          const fd = fs.openSync(log, 'r'); const buf = Buffer.alloc(st.size - offset);
+          fs.readSync(fd, buf, 0, buf.length, offset); fs.closeSync(fd); offset = st.size;
+          for (const l of buf.toString('utf8').split('\n').filter(Boolean)) if (!/loading capture (?!100%)/.test(l)) process.stderr.write(`  rd| ${l}\n`);
+        }
+      } catch { /* not yet */ }
+    }
+    if (sessionAlive(sdir, c.meta.capture)) {
+      return `session ready in ${Math.round((Date.now() - t0) / 1000)}s (pid ${pid}). Live commands on this capture now skip loading; it exits after ${opts.idle || 900}s without jobs or with \`session <rdc> --stop\`.`;
+    }
+    try { process.kill(pid, 0); } catch { break; }
+    await new Promise((r) => setTimeout(r, 300));
+  }
+  throw new Error(`session did not start; see ${log}`);
 }

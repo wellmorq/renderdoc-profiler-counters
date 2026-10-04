@@ -22,7 +22,7 @@ node .agents/skills/renderdoc-gpu/scripts/rdgpu.mjs compare before.rdc after.rdc
 node .agents/skills/renderdoc-gpu/scripts/rdgpu.mjs experiment frame.rdc 575 --variant fewer_taps=edit/v1/main.hlsl
 ```
 
-Run it without arguments for every command. `SKILL.md` describes the workflow agents follow; `references/` holds setup/troubleshooting, counter meanings, the analysis method, Unity debug pragmas, experiment guidance and answer formats.
+For a series of live questions on one capture, `session <capture>` keeps it loaded in a background RenderDoc so `draw`/`drawdiff`/`source`/`experiment` don't reload it each time. Run the CLI without arguments for every command. `SKILL.md` describes the workflow agents follow; `references/` holds setup/troubleshooting, counter meanings, the analysis method, Unity debug pragmas, experiment guidance and answer formats.
 
 ## Repository layout
 

@@ -12,8 +12,11 @@ S doctor --capture <file.rdc>      # once per machine/session: RenderDoc found? 
 S open <file.rdc>                  # replays once (seconds–minutes), builds a working cache, prints a summary
 S tree|top|event|shaders|shader|find|metrics|compare ...   # instant, offline, from the cache
 S draw|drawdiff|rt|source|experiment|usage ...             # replay the .rdc again for one question
+S session <file.rdc>               # optional: keep the .rdc loaded in a background RenderDoc for a series of live commands
 ```
 The `.rdc` is the only input and the source of truth. The cache (`%LOCALAPPDATA%\rdgpu\cache`, Linux `~/.cache/rdgpu`) is derived from it, rebuilt automatically when the file changes, and holds the shader dumps/edits/images you create. Every command takes the `.rdc` path. Run `S` without arguments for the full command list. Read command output; don't open cache JSON files unless a command lacks something.
+
+Each live command loads the capture (seconds for small captures, up to a minute for big Unity ones). When you will run several live commands on the same capture (`draw`, `drawdiff`, `source`, `experiment`, `fetch`), start `S session <file.rdc>` first: those commands then reuse the loaded capture automatically. It exits by itself after 15 min idle (`--idle <sec>`), or `S session <file.rdc> --stop`.
 
 Results go to stdout, RenderDoc progress to stderr — don't merge them (`2>&1`) when you save or diff output; add `-q` to silence progress. Live commands take seconds; `experiment` can take minutes (≈ (variants + 2) × `--repeat` replays): give it a long timeout or run it in the background.
 

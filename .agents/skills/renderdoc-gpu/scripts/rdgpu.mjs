@@ -36,6 +36,7 @@ QUERY (offline, instant)
   find-source <rdc> <shader-id> --project <dir>   rank project shader files by identifier overlap
 
 LIVE (replays the capture; seconds to minutes)
+  session <rdc> [--idle sec] [--stop]  keep the capture loaded in a background RenderDoc; live commands reuse it
   draw <rdc> <eid> [--all]            constant-buffer values, texture slots, targets
   drawdiff <a.rdc> <b.rdc> <eid> [eid-in-b]   what differs for the same event in two captures (constants, textures, state)
   rt <rdc> <eid> [--depth|--all]      save render target(s) after the event as PNG
@@ -89,6 +90,8 @@ const OPTIONS = {
   label: { type: 'string' },
   as: { type: 'string' },
   src: { type: 'boolean' },
+  stop: { type: 'boolean' },
+  idle: { type: 'string' },
   grep: { type: 'string' },
   resource: { type: 'string' },
   verbose: { type: 'boolean' },
@@ -194,6 +197,7 @@ async function main() {
       out(await live.drawdiff(loadCase(args[0]), loadCase(args[1]), Number(args[2]), Number(args[3] || args[2]), { ...common, all: o.all }));
       return;
     }
+    case 'session': need(1, '<capture>'); out(await live.session(loadCase(args[0]), { ...common, stop: o.stop, idle: o.idle ? Number(o.idle) : undefined })); return;
     case 'draw': need(2, '<capture> <eid>'); out(await live.draw(loadCase(args[0]), Number(args[1]), { ...common, all: o.all })); return;
     case 'rt': need(2, '<capture> <eid>'); out(await live.rt(loadCase(args[0]), Number(args[1]), { ...common, depth: !!parseDepthFlag(o), all: o.all, resource: o.resource })); return;
     case 'usage': need(2, '<capture> <resource-id>'); out(await live.usage(loadCase(args[0]), Number(args[1]), { ...common, n: num(o.n, 60) })); return;
