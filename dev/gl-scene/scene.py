@@ -29,6 +29,7 @@ _glx.GLXPlatform.GL = baseplatform.lazy_property(
 from OpenGL import GL as gl  # noqa: E402
 
 W, H = 1280, 720
+LABELS = True
 
 
 # ---------------------------------------------------------------- shaders
@@ -175,7 +176,8 @@ def compile_program(label, vs, fs):
     gl.glLinkProgram(prog)
     if not gl.glGetProgramiv(prog, gl.GL_LINK_STATUS):
         raise RuntimeError(label + ": " + gl.glGetProgramInfoLog(prog).decode())
-    gl.glObjectLabel(gl.GL_PROGRAM, prog, len(label), label)
+    if LABELS:
+        gl.glObjectLabel(gl.GL_PROGRAM, prog, len(label), label)
     return prog
 
 
@@ -389,7 +391,10 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--variant", choices=["a", "b"], default="a")
     ap.add_argument("--out", required=True, help="capture path template (without .rdc)")
+    ap.add_argument("--no-labels", action="store_true", help="no program names (like Unity D3D11 captures)")
     args = ap.parse_args()
+    global LABELS
+    LABELS = not args.no_labels
     b = args.variant == "b"
     extra_lights = 24 if b else 4
     particles = 420 if b else 160

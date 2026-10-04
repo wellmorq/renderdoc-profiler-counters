@@ -11,6 +11,9 @@ import { presetHelp } from './lib/presets.mjs';
 import * as q from './lib/query.mjs';
 import { writeReport } from './lib/report.mjs';
 import { doctor, setupNvPerf } from './lib/setup.mjs';
+import { config, configPath } from './lib/env.mjs';
+
+config();
 
 const HELP = `renderdoc-gpu — analyze RenderDoc GPU captures (.rdc) from the command line
 
@@ -51,7 +54,8 @@ ${presetHelp()}
 
 COMMON  --json (where supported) --timeout <sec> --host qrenderdoc|python
 ENV     RDGPU_RENDERDOC=<qrenderdoc dir>  RENDERDOC_PYTHON_PATH=<dir with renderdoc module> RDGPU_PYTHON=<python>
-        RDGPU_CASES=<dir> to keep caches outside the capture folder`;
+        RDGPU_CASES=<dir> to keep caches outside the capture folder
+CONFIG  ${configPath()}  {"renderdoc": "...", "cases": "...", "env": {...}} (env vars win)`;
 
 const OPTIONS = {
   json: { type: 'boolean' },

@@ -36,21 +36,21 @@ export function writeReport(c, opts = {}) {
 body{margin:0;background:var(--bg);color:var(--fg);font:13px/1.45 ui-sans-serif,system-ui,sans-serif}
 main{max-width:1200px;margin:0 auto;padding:16px}h1{font-size:18px;margin:0 0 4px}h2{font-size:14px;margin:24px 0 8px}
 .mut{color:var(--mut)}table{border-collapse:collapse;width:100%}td,th{padding:3px 6px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap}
-td.l,th.l{text-align:left}tr.g{cursor:pointer}tr.g td.l::before{content:'▸ ';color:var(--mut)}tr.g.o td.l::before{content:'▾ '}
-tr:hover{background:var(--hi)}.b{height:8px;background:var(--bar);border-radius:2px}.bw{width:160px;background:var(--bar2);border-radius:2px}
+td.l,th.l{text-align:left}tr.g{cursor:pointer}tr.g td.n::before{content:'▸ ';color:var(--mut)}tr.g.o td.n::before{content:'▾ '}td.n{white-space:normal;min-width:280px}
+tr:hover{background:var(--hi)}.b{height:8px;background:var(--bar);border-radius:2px}.bw{width:140px;background:var(--bar2);border-radius:2px}td.bc{width:150px}
 input{font:inherit;padding:4px 8px;border:1px solid var(--line);background:var(--bg);color:var(--fg);border-radius:4px;width:260px}
-.wrap{overflow-x:auto}img{max-width:320px;border:1px solid var(--line);float:right;margin-left:12px}
+.wrap{overflow-x:auto}header{display:flex;gap:16px;align-items:flex-start;justify-content:space-between;flex-wrap:wrap}img{max-width:280px;border:1px solid var(--line);border-radius:4px}
 </style></head><body><main>
 <div id="h"></div><h2>Marker tree <input id="q" placeholder="filter by name…"></h2><div class="wrap"><table id="t"></table></div>
 <h2>Shaders by GPU time (ps/cs)</h2><div class="wrap"><table id="s"></table></div>
 <script>const D=${JSON.stringify(data).replace(/</g, '\\u003c')};
 const f=v=>v==null?'-':v>=10?v.toFixed(2):v>=.1?v.toFixed(3):v.toFixed(4);const pc=v=>D.frame&&v!=null?(v/D.frame*100).toFixed(1)+'%':'-';
 const esc=s=>String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
-document.getElementById('h').innerHTML=(D.thumb?'<img src="'+D.thumb+'" alt="">':'')+'<h1>'+esc(D.title)+'</h1><div class="mut">'+esc(D.api)+' · '+esc(D.vendor)+' · '+f(D.frame)+' ms summed GPU time · '+D.nodes.filter(n=>n.k==='draw').length+' draws</div>';
+document.getElementById('h').innerHTML='<header><div><h1>'+esc(D.title)+'</h1><div class="mut">'+esc(D.api)+' · '+esc(D.vendor)+' · '+f(D.frame)+' ms summed GPU time · '+D.nodes.filter(n=>n.k==='draw').length+' draws</div></div>'+(D.thumb?'<img src="'+D.thumb+'" alt="capture thumbnail">':'')+'</header>';
 const kids=new Map();for(const n of D.nodes){if(!kids.has(n.p))kids.set(n.p,[]);kids.get(n.p).push(n)}
 const open=new Set(D.nodes.filter(n=>n.d===0).map(n=>n.e));const T=document.getElementById('t');
 function rows(q){let h='<tr><th class="l">name</th><th>eid</th><th>ms</th><th>%</th><th class="l"></th><th>ps inv</th><th>verts</th><th>shader</th></tr>';
-const add=(n)=>{const g=kids.has(n.e);const vis=!q||n.n.toLowerCase().includes(q);if(vis)h+='<tr class="'+(g?'g':'')+(open.has(n.e)?' o':'')+'" data-e="'+n.e+'"><td class="l" style="padding-left:'+(6+n.d*14)+'px">'+esc(n.n)+'</td><td>'+n.e+'</td><td>'+f(n.ms)+'</td><td>'+pc(n.ms)+'</td><td class="l"><div class="bw"><div class="b" style="width:'+(D.frame&&n.ms?Math.min(100,n.ms/D.frame*100):0)+'%"></div></div></td><td>'+(n.ps??'')+'</td><td>'+(n.v??'')+'</td><td>'+(n.sh??'')+'</td></tr>';
+const add=(n)=>{const g=kids.has(n.e);const vis=!q||n.n.toLowerCase().includes(q);if(vis)h+='<tr class="'+(g?'g':'')+(open.has(n.e)?' o':'')+'" data-e="'+n.e+'"><td class="l n" style="padding-left:'+(6+n.d*14)+'px">'+esc(n.n)+'</td><td>'+n.e+'</td><td>'+f(n.ms)+'</td><td>'+pc(n.ms)+'</td><td class="l"><div class="bw"><div class="b" style="width:'+(D.frame&&n.ms?Math.min(100,n.ms/D.frame*100):0)+'%"></div></div></td><td>'+(n.ps??'')+'</td><td>'+(n.v??'')+'</td><td>'+(n.sh??'')+'</td></tr>';
 if(g&&(open.has(n.e)||q))for(const k of kids.get(n.e))add(k)};for(const r of kids.get(0)||[])add(r);T.innerHTML=h}
 T.onclick=e=>{const tr=e.target.closest('tr.g');if(!tr)return;const id=+tr.dataset.e;open.has(id)?open.delete(id):open.add(id);rows(document.getElementById('q').value.toLowerCase())};
 document.getElementById('q').oninput=e=>rows(e.target.value.toLowerCase());rows('');

@@ -6,6 +6,26 @@ import { spawnSync } from 'node:child_process';
 
 export const IS_WIN = process.platform === 'win32';
 
+// Optional user config: { "renderdoc": "<qrenderdoc dir or exe>", "pythonPath": "<renderdoc module dir>",
+//   "python": "<interpreter>", "cases": "<cache dir>", "env": { "VAR": "value" } }
+export function configPath() {
+  if (process.env.RDGPU_CONFIG) return process.env.RDGPU_CONFIG;
+  const base = IS_WIN ? (process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming')) : (process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'));
+  return path.join(base, 'rdgpu', 'config.json');
+}
+let _cfg;
+export function config() {
+  if (_cfg === undefined) {
+    try { _cfg = JSON.parse(fs.readFileSync(configPath(), 'utf8')); } catch { _cfg = {}; }
+    for (const [k, v] of Object.entries(_cfg.env || {})) if (process.env[k] === undefined) process.env[k] = String(v);
+    if (_cfg.renderdoc && !process.env.RDGPU_RENDERDOC) process.env.RDGPU_RENDERDOC = _cfg.renderdoc;
+    if (_cfg.pythonPath && !process.env.RENDERDOC_PYTHON_PATH) process.env.RENDERDOC_PYTHON_PATH = _cfg.pythonPath;
+    if (_cfg.python && !process.env.RDGPU_PYTHON) process.env.RDGPU_PYTHON = _cfg.python;
+    if (_cfg.cases && !process.env.RDGPU_CASES) process.env.RDGPU_CASES = _cfg.cases;
+  }
+  return _cfg;
+}
+
 const exists = (p) => { try { return !!p && fs.existsSync(p); } catch { return false; } };
 
 // RenderDoc loads nvperf_grfx_host from FileIO::GetAppFolderFilename("plugins/nv"):

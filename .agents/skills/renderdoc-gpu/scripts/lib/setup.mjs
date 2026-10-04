@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import zlib from 'node:zlib';
-import { chooseHost, findPythonHost, findQRenderDoc, IS_WIN, nodeOk, nvPluginDir, nvPluginFiles } from './env.mjs';
+import { chooseHost, configPath, findPythonHost, findQRenderDoc, IS_WIN, nodeOk, nvPluginDir, nvPluginFiles } from './env.mjs';
 import { runJob } from './runner.mjs';
 
 export const NVPERF_URL = 'https://developer.nvidia.com/nsight-perf-sdk/get-started';
@@ -186,6 +186,7 @@ export function setupNvPerf(opts = {}) {
 export async function doctor(opts = {}) {
   const lines = [];
   let ready = true;
+  lines.push(`config: ${configPath()}${fs.existsSync(configPath()) ? '' : ' (none)'}`);
   lines.push(`node ${process.versions.node} ${nodeOk() ? 'OK' : 'TOO OLD (need 18+)'} | ${process.platform} ${os.release()}`);
   const qs = findQRenderDoc();
   const py = findPythonHost();
