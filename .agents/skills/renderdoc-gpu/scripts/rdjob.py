@@ -19,6 +19,8 @@ import traceback
 
 JOB = None
 PROGRESS = None
+# rdc-cli's `script` RPC executes this file with controller/rd/state/args injected
+IN_RDC = "controller" in globals() and "state" in globals() and "rd" in globals()
 T0 = time.time()
 
 
@@ -1373,6 +1375,8 @@ def main():
     global JOB, PROGRESS
     argv = getattr(sys, "argv", None) or []  # embedded interpreters may not set argv
     job_path = os.environ.get("RDGPU_JOB") or (argv[1] if len(argv) > 1 and argv[1].endswith(".json") else None)
+    if IN_RDC:
+        job_path = (globals().get("args") or {}).get("job") or job_path
     if not job_path:
         raise SystemExit(2)
     with open(job_path, "r", encoding="utf-8") as f:
@@ -1388,13 +1392,19 @@ def main():
     in_ui = "pyrenderdoc" in globals() or "qrenderdoc" in sys.modules
     rd = None
     try:
-        rd = import_rd()
+        rd = globals()["rd"] if IN_RDC else import_rd()
         result["renderdocVersion"] = safe(rd.GetVersionString, "")
-        result["host"] = "qrenderdoc" if in_ui else "python"
+        result["host"] = "rdc" if IN_RDC else ("qrenderdoc" if in_ui else "python")
         if JOB.get("tasks") == ["version"]:
             result["ok"] = True
             return
-        cap, controller = open_capture(rd, JOB["capture"], in_ui)
+        if IN_RDC:
+            # running inside the rdc-cli daemon: the capture is already open; never shut it down
+            controller = globals()["controller"]
+            cap = getattr(globals()["state"], "cap", None)
+            log("using capture already open in the rdc daemon")
+        else:
+            cap, controller = open_capture(rd, JOB["capture"], in_ui)
         ctx = Ctx(rd, cap, controller, out)
         if JOB.get("serve"):
             result["tasks"].append({"type": "session", "ok": True, "result": serve(ctx, JOB)})
@@ -1410,12 +1420,18 @@ def main():
         log("FAILED: %s" % e)
     finally:
         result["seconds"] = round(time.time() - result["started"], 2)
-        if controller is not None:
-            safe(controller.Shutdown)
-        if cap is not None:
-            safe(cap.Shutdown)
-        if rd is not None and not in_ui:
-            safe(rd.ShutdownReplay)
+        if IN_RDC:
+            # we moved the replay to other events: make rdc re-seek before its next command
+            st = globals().get("state")
+            if st is not None and hasattr(st, "_eid_cache"):
+                st._eid_cache = -1
+        else:
+            if controller is not None:
+                safe(controller.Shutdown)
+            if cap is not None:
+                safe(cap.Shutdown)
+            if rd is not None and not in_ui:
+                safe(rd.ShutdownReplay)
         try:
             write_json(result_path, result)
         finally:
@@ -1424,7 +1440,9 @@ def main():
                 PROGRESS.close()
 
 
-if not os.environ.get("RDGPU_IMPORT_ONLY"):
+if IN_RDC:
+    main()
+elif not os.environ.get("RDGPU_IMPORT_ONLY"):
     try:
         main()
     finally:

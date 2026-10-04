@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { findRdc } from './rdc.mjs';
 
 export const IS_WIN = process.platform === 'win32';
 
@@ -99,7 +100,12 @@ export function findPythonHost() {
 }
 
 export function chooseHost(opts = {}) {
-  const prefer = opts.host || process.env.RDGPU_HOST;
+  const prefer = opts.host || process.env.RDGPU_HOST || config().host;
+  if (prefer === 'rdc' || !prefer) {
+    const exe = findRdc();
+    if (exe) return { kind: 'rdc', exe };
+    if (prefer === 'rdc') throw new Error('host rdc requested but rdc-cli is not installed — run `install`');
+  }
   const py = findPythonHost();
   const qs = findQRenderDoc();
   if (prefer === 'python') {
@@ -109,8 +115,8 @@ export function chooseHost(opts = {}) {
   if (prefer !== 'qrenderdoc' && py) return { kind: 'python', ...py };
   if (qs.length) return { kind: 'qrenderdoc', exe: qs[0].exe, how: qs[0].how };
   if (py) return { kind: 'python', ...py };
-  throw new Error('RenderDoc not found. Install it from https://renderdoc.org (Windows installer) or set '
-    + 'RDGPU_RENDERDOC to the folder containing qrenderdoc' + (IS_WIN ? '.exe' : '') + '. Run `doctor` for details.');
+  throw new Error('No RenderDoc backend found. Run `install` (sets up rdc-cli + RenderDoc Python module), or install RenderDoc from '
+    + 'https://renderdoc.org/builds for the fallback qrenderdoc host. Run `doctor` for details.');
 }
 
 export function nodeOk() {

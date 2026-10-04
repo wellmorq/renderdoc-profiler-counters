@@ -9,14 +9,18 @@ import { fetchCounters, openCapture } from './lib/prepare.mjs';
 import { presetHelp } from './lib/presets.mjs';
 import * as q from './lib/query.mjs';
 import { doctor, setupNvPerf } from './lib/setup.mjs';
+import { install } from './lib/install.mjs';
 import { config, configPath } from './lib/env.mjs';
+import { sessionName } from './lib/rdc.mjs';
 
 config();
 
 const HELP = `renderdoc-gpu — analyze RenderDoc GPU captures (.rdc) from the command line
 
-SETUP
-  doctor [--capture <rdc>]            check RenderDoc, headless Python host, Nsight Perf SDK, counters
+SETUP (first run on a machine: \`install\`, then \`doctor --capture <rdc>\`)
+  install [--check] [--renderdoc-version v1.46]   set up rdc-cli: uv, rdc-cli, build RenderDoc's Python module
+                                      (needs git + C++ build tools; the build takes 10-40 min), Nsight Perf SDK
+  doctor [--capture <rdc>]            check backend (rdc-cli / qrenderdoc), Nsight Perf SDK, counters for a capture
   setup-nvperf [--from <zip|dir|dll>] install nvperf_grfx_host for RenderDoc's NVIDIA counters
 
 PREPARE (replays the .rdc once into a working cache; later queries are instant)
@@ -91,6 +95,10 @@ const OPTIONS = {
   as: { type: 'string' },
   src: { type: 'boolean' },
   stop: { type: 'boolean' },
+  check: { type: 'boolean' },
+  'skip-build': { type: 'boolean' },
+  'renderdoc-version': { type: 'string' },
+  'rdc-source': { type: 'string' },
   idle: { type: 'string' },
   grep: { type: 'string' },
   context: { type: 'string', short: 'C' },
@@ -125,6 +133,12 @@ async function main() {
       process.exitCode = r.ready ? 0 : 2;
       return;
     }
+    case 'install': {
+      const r = install({ check: o.check, skipBuild: o['skip-build'], renderdocVersion: o['renderdoc-version'], rdcSource: o['rdc-source'] });
+      out(r.text);
+      process.exitCode = r.ok ? 0 : 2;
+      return;
+    }
     case 'setup-nvperf': {
       const r = setupNvPerf({ from: o.from || args[0] });
       out(r.text);
@@ -139,7 +153,7 @@ async function main() {
       });
       const c = loadCase(r.dir);
       out(`case: ${r.dir}${r.reused ? ' (cached)' : ` (extracted in ${r.meta.seconds}s)`}\n`);
-      out(o.json ? JSON.stringify({ dir: r.dir, info: { api: c.info.api, vendor: c.info.vendor }, frameMs: c.frameMs() }) : q.summary(c, { n: num(o.n, 8) }));
+      out(o.json ? JSON.stringify({ dir: r.dir, info: { api: c.info.api, vendor: c.info.vendor }, frameMs: c.frameMs() }) : q.summary(c, { n: num(o.n, 8), rdcSession: sessionName(c.meta.capture) }));
       return;
     }
     case 'fetch': {
@@ -152,7 +166,7 @@ async function main() {
       }
       return;
     }
-    case 'summary': need(1, '<capture>'); out(q.summary(loadCase(args[0]), { n: num(o.n, 8) })); return;
+    case 'summary': { need(1, '<capture>'); const c = loadCase(args[0]); out(q.summary(c, { n: num(o.n, 8), rdcSession: sessionName(c.meta.capture) })); return; }
     case 'tree': {
       need(1, '<capture> [marker|eid]');
       const c = loadCase(args[0]);

@@ -3,6 +3,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import zlib from 'node:zlib';
+import { spawnSync } from 'node:child_process';
+import { findRdc } from './rdc.mjs';
 import { chooseHost, configPath, findPythonHost, findQRenderDoc, IS_WIN, nodeOk, nvPluginDir, nvPluginFiles } from './env.mjs';
 import { runJob } from './runner.mjs';
 import { vendorCounterStatus } from './query.mjs';
@@ -189,6 +191,17 @@ export async function doctor(opts = {}) {
   let ready = true;
   lines.push(`config: ${configPath()}${fs.existsSync(configPath()) ? '' : ' (none)'}`);
   lines.push(`node ${process.versions.node} ${nodeOk() ? 'OK' : 'TOO OLD (need 18+)'} | ${process.platform} ${os.release()}`);
+  const rdcExe = findRdc();
+  if (rdcExe) {
+    const d = spawnSync(rdcExe, ['doctor'], { encoding: 'utf8', windowsHide: true, timeout: 120000 });
+    const t = `${d.stdout || ''}${d.stderr || ''}`;
+    const v = t.match(/renderdoc-module: version=([\d.]+)/);
+    const okMod = /\[ok\] renderdoc-module/.test(t) && /\[ok\] replay-support/.test(t);
+    lines.push(`rdc-cli: ${rdcExe} — RenderDoc module ${okMod ? `v${v ? v[1] : '?'} ok` : 'NOT READY (run `install`)'}`);
+    if (!okMod) ready = false;
+  } else {
+    lines.push('rdc-cli: NOT INSTALLED — preferred backend (full RenderDoc API, persistent sessions). Run `install`; meanwhile the qrenderdoc fallback below is used if present.');
+  }
   const qs = findQRenderDoc();
   const py = findPythonHost();
   if (qs.length) qs.forEach((q, i) => lines.push(`${i ? '   ' : ''}qrenderdoc: ${q.exe}  [${q.how}]`));
@@ -196,7 +209,9 @@ export async function doctor(opts = {}) {
   if (py) lines.push(`python host: ${py.python} + renderdoc module at ${py.modulePath} (RENDERDOC_PYTHON_PATH)`);
   let host = null;
   try { host = chooseHost(opts); } catch (e) { lines.push(`host: ${e.message}`); ready = false; }
-  if (host) {
+  if (host && host.kind === 'rdc' && !opts.capture) {
+    lines.push('backend: rdc (checked by `rdc doctor` above); add --capture <file.rdc> to test a real replay');
+  } else if (host) {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'rdgpu-doctor-'));
     try {
       const tasks = opts.capture ? [{ type: 'info', required: true }] : ['version'];

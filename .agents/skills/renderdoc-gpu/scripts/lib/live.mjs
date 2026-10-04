@@ -3,6 +3,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fmtMs, table, trunc } from './format.mjs';
 import { runJob, sessionAlive, startSession, stopSession, taskResult } from './runner.mjs';
+import { chooseHost } from './env.mjs';
+import { closeDaemon, ensureDaemon, liveSession, sessionName } from './rdc.mjs';
 
 const stamp = () => new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 
@@ -284,6 +286,14 @@ export async function usage(c, resId, opts) {
 }
 
 export async function session(c, opts) {
+  const host = chooseHost(opts);
+  if (host.kind === 'rdc') {
+    const name = sessionName(c.meta.capture);
+    if (opts.stop) return closeDaemon(c.meta.capture, { rdc: host.exe }) ? `rdc session ${name} closed` : 'no rdc session running';
+    const was = await liveSession(c.meta.capture);
+    await ensureDaemon(c.meta.capture, { rdc: host.exe, quiet: opts.quiet });
+    return `${was ? 'rdc session already open' : 'rdc session open'}: ${name}. Live commands reuse it; you can also call rdc-cli directly on the same capture:\n  rdc --session ${name} <command>   (pipeline <eid>, bindings <eid>, debug pixel <eid> <x> <y>, pixel <x> <y>, mesh <eid>, cbuffer, tex-stats, ...)\nIt closes after 30 min idle or with \`session <rdc> --stop\`.`;
+  }
   const sdir = path.join(c.dir, 'session');
   if (opts.stop) {
     if (!stopSession(sdir)) return 'no session running';

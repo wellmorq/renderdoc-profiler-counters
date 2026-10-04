@@ -4,6 +4,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { chooseHost, IS_WIN, renderdocLogDir } from './env.mjs';
+import { ensureDaemon, runScript } from './rdc.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const RDJOB = path.join(HERE, '..', 'rdjob.py');
@@ -40,11 +41,47 @@ export async function runJob(jobDir, job, opts = {}) {
   const jobFile = path.join(jobDir, 'job.json');
   fs.writeFileSync(jobFile, JSON.stringify(full, null, 1));
 
+  const host = opts.hostInfo || chooseHost(opts);
+  if (host.kind === 'rdc') return runInRdc(host, jobFile, full, opts);
   if (opts.sessionDir && !opts.noSession && !fs.existsSync(path.join(opts.sessionDir, 'stop'))) {
     const alive = sessionAlive(opts.sessionDir, job.capture);
     if (alive) return runInSession(opts.sessionDir, jobFile, full, opts);
   }
   return spawnJob(jobFile, full, job, opts);
+}
+
+function makeTail(file, opts) {
+  let offset = 0;
+  return () => {
+    if (opts.quiet) return;
+    try {
+      const st = fs.statSync(file);
+      if (st.size <= offset) return;
+      const fd = fs.openSync(file, 'r');
+      const buf = Buffer.alloc(st.size - offset);
+      fs.readSync(fd, buf, 0, buf.length, offset); fs.closeSync(fd); offset = st.size;
+      for (const l of buf.toString('utf8').split('\n').filter(Boolean)) {
+        if (!opts.verbose && /loading capture (?!100%)\d+%|\] state \d+\/\d+ |^\[[^\]]*\]\s+done in |fetching counters \d+-/.test(l)) continue;
+        process.stderr.write(`  rd| ${l}\n`);
+      }
+    } catch { /* not yet */ }
+  };
+}
+
+async function runInRdc(host, jobFile, full, opts) {
+  const sess = await ensureDaemon(full.capture, { rdc: host.exe, quiet: opts.quiet });
+  if (!opts.quiet) process.stderr.write(`[renderdoc-gpu] running ${full.tasks.map((t) => t.type || t).join(', ')} in rdc session ${sess.name}\n`);
+  const tail = makeTail(full.progress, opts);
+  const timer = setInterval(tail, 400);
+  try {
+    await runScript(sess, RDJOB, jobFile, (opts.timeoutSec || 1800) * 1000);
+  } finally {
+    clearInterval(timer);
+    tail();
+  }
+  try { return JSON.parse(fs.readFileSync(full.result, 'utf8')); } catch {
+    throw new Error(`rdc session ${sess.name} ran the job but wrote no result (${jobFile}). Try \`rdc --session ${sess.name} status\`.`);
+  }
 }
 
 // A session is alive when its heartbeat is fresh and it serves the same capture.
@@ -128,6 +165,7 @@ function hostCommand(host, jobFile) {
 
 async function spawnJob(jobFile, full, job, opts) {
   const host = opts.hostInfo || chooseHost(opts);
+  if (host.kind === 'rdc') throw new Error('internal: rdc host must use runInRdc');
   const env = { ...process.env, RDGPU_JOB: jobFile };
   let cmd;
   let args;

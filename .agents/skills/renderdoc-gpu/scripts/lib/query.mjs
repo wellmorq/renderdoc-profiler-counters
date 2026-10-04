@@ -72,6 +72,7 @@ export function summary(c, opts = {}) {
   out.push(`API      ${c.info.api || '?'} | replay GPU vendor ${c.info.vendor || '?'} | RenderDoc ${c.info.renderdocVersion || c.meta.renderdoc || '?'} via ${c.meta.host || '?'}${c.info.degraded ? ' | DEGRADED replay (results less reliable)' : ''}`);
   if (/software|llvmpipe|warp/i.test(c.info.vendor || '')) out.push('WARNING  replay GPU is a SOFTWARE rasterizer: compare only relative numbers; clears, texture fetches and timing noise behave unlike a real GPU');
   out.push(`CACHE    ${c.dir} (derived from the .rdc, safe to delete)`);
+  if (c.meta.host === 'rdc' && opts.rdcSession) out.push(`RDC      session ${opts.rdcSession} keeps this capture open: \`rdc --session ${opts.rdcSession} <command>\` for rdc-cli tools (pipeline, debug pixel, pixel history, mesh…)`);
   if (c.info.driverAtCapture) out.push(`CAPTURED ${c.info.driverAtCapture}${c.info.machineAtCapture ? ' on ' + c.info.machineAtCapture : ''}`);
   if (fs.existsSync(path.join(c.dir, 'thumbnail.png'))) out.push(`THUMB    ${path.join(c.dir, 'thumbnail.png')} (what the frame looks like)`);
   out.push(`FRAME    ${c.actions.length} actions: ${w.draws} draws, ${w.dispatches} dispatches, ${w.clears} clears, ${w.copies} copies, ${w.markers} markers`);

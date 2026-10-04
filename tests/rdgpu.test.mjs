@@ -262,10 +262,10 @@ test('live: open + draw + experiment on a real capture', { skip: !LIVE, timeout:
   assert.match(r.out, /original/);
   r = cli(['session', cap, '--idle', '60'], { timeout: 300000 });
   assert.equal(r.code, 0, r.err);
-  assert.match(r.out, /session ready/);
+  assert.match(r.out, /session (ready|open|already open)/);
   r = cli(['draw', cap, String(eid)], { timeout: 300000 });
   assert.equal(r.code, 0, r.err);
-  assert.match(r.err, /in the open session/);
+  assert.match(r.err, /in the open session|in rdc session/);
   r = cli(['session', cap, '--stop']);
-  assert.match(r.out, /session stop/);
+  assert.match(r.out, /session (stop|.*closed)/);
 });
