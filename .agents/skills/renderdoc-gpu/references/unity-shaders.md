@@ -46,6 +46,23 @@ Shader Graph: open the graph's generated code (**View Generated Shader**), save 
 3. Material properties declared in `Properties {}` + `CBUFFER_START(UnityPerMaterial)` identify the `.shader`; `#include` files that declare the cbuffer may rank higher — the owning shader includes them.
 4. Confirm by comparing a distinctive expression (constant, loop bound, texture name) between the disassembly/embedded source and the candidate file. State the confidence.
 
+## Mapping captured values to Unity settings
+
+Constant names from `draw`/`drawdiff` usually point to a specific Unity setting:
+
+| captured value | Unity side |
+|---|---|
+| `_AdditionalLightsCount`, `_AdditionalLightsPosition[]` (URP) | URP Asset → Lighting → Additional Lights (Per Pixel/Per Vertex/Disabled, Per Object Limit); number of lights touching the object; Light Layers/culling |
+| `_MainLightShadowmapTexture` size, `_MainLightWorldToShadow`, cascades | URP Asset → Shadows (Max Distance, Cascade Count, resolution); Light → Shadow Type, soft shadows quality |
+| `_AdditionalLightsShadowmapTexture` | URP Asset → Additional Lights → Cast Shadows, shadow atlas resolution |
+| bloom params (`_Params`, `_Bloom_Params`, custom tap counts), mip chain size | Volume profile → Bloom (Threshold, Intensity, Scatter, High Quality Filtering, Downscale, Max Iterations); custom Renderer Features for non-URP names — grep the project for the constant name |
+| `_ScreenParams`, render target sizes | Render Scale, camera target texture, Dynamic Resolution, MSAA |
+| particle draw `instances`/`ps` growth | Particle System → Max Particles, Emission rate/bursts, Start Size / Size over Lifetime (overdraw), Renderer → Max Particle Size |
+| large `verts`/`rastPrims` for one object | LOD Group thresholds, mesh import (read the object name from the marker, e.g. `RenderLoop.Draw: HeroStatue`) |
+| SRP batcher markers `RenderLoop.DrawSRPBatcher` with many small draws | GPU Resident Drawer / GPU instancing, Occlusion Culling, static batching |
+
+When the name is custom (not URP/HDRP), find it with `find-source` or grep the project for it, then name the script/asset that sets it.
+
 ## Keywords / variants
 
 RenderDoc doesn't know Unity keywords. Infer the variant from what is present (e.g. `_ADDITIONAL_LIGHTS` loops, shadow sampler usage, normal-map fetch). Unity's Frame Debugger shows the keywords for a draw if you need certainty — ask the user to check it there.

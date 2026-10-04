@@ -44,7 +44,7 @@ function explain(name, A, B, metrics) {
     const a = A.ag[m]?.v; const b = B.ag[m]?.v;
     if (!a || b === null || b === undefined) continue;
     const wr = b / a;
-    if (Math.abs(wr - 1) < 0.03) { parts.push(`${shortMetric(m)} unchanged`); continue; }
+    if (Math.abs(wr - 1) < 0.03) { parts.push(`${shortMetric(m)} same`); continue; }
     const costR = msR / wr;
     parts.push(`${shortMetric(m)} ${pct(wr)} (ms per ${shortMetric(m)} ${pct(costR)})`);
   }
@@ -65,6 +65,7 @@ export function compare(A, B, marker, opts = {}) {
   if (onlyA.length || onlyB.length) warn.push(`counter sets differ (only A: ${onlyA.slice(0, 4).join(', ') || '-'}; only B: ${onlyB.slice(0, 4).join(', ') || '-'})`);
   const mainTex = (c) => { const t = (c.info.textures || []).filter((x) => /RenderTarget|ColorTarget|SwapBuffer/i.test(x.flags || '')).sort((x, y) => (y.w * y.h) - (x.w * x.h))[0]; return t ? `${t.w}x${t.h}` : '?'; };
   if (mainTex(A) !== mainTex(B)) warn.push(`largest render target differs (${mainTex(A)} vs ${mainTex(B)}) — resolution change?`);
+  if ([A, B].some((c) => /software|llvmpipe|warp/i.test(c.info.vendor || '') || c.info.degraded)) warn.push('replayed on a software/degraded GPU: per-marker timing swings without a work or drawdiff difference are noise');
   for (const w of warn) out.push(`WARNING ${w}`);
 
   const rootsA = marker ? A.findNodes(marker) : A.roots;
@@ -128,7 +129,8 @@ export function compare(A, B, marker, opts = {}) {
     if (evB && !hints.some((h) => h.includes(`@${evB.eid}`))) hints.push(`  ${trunc(r.k.split(SEP).pop(), 50)}: same work, ${fmtDelta(r.sa.ms, r.sb.ms)} time -> drawdiff <A> <B> ${evA ?? '<eid in A>'} ${evB.eid}   (heaviest event @${evB.eid})`);
     if (hints.length >= 4) break;
   }
-  if (hints.length) out.push('', 'SAME WORK, DIFFERENT COST — diff constants/textures/state of the heaviest event (live):', ...hints);
+  if (hints.length) out.push('', 'SAME WORK COUNTERS, DIFFERENT COST — per-item cost changed (constants such as loop counts, textures, state) or timing noise. Check the heaviest event (live):', ...hints,
+    '  drawdiff shows nothing -> shader code (SHADERS table) or noise; confirm with `fetch <rdc> generic --repeat 5` on both.');
 
   // shaders
   const shA = shaderRanking(A, { stages: ['ps', 'cs', 'vs'], within: marker ? rootsA.flatMap((n) => A.workUnder(n)) : null });

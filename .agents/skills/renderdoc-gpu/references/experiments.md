@@ -10,7 +10,9 @@ S source <rdc> <eid> --as fewer_taps            # editable copy per variant; edi
 S experiment <rdc> <eid> --stage ps --variant fewer_taps=<path printed by source> [--variant b=...] [--repeat 5] [--images]
 ```
 
+- Each `source --as <name>` writes a fresh, unmodified copy of the captured source into its own directory — edit it in place; don't copy directories by hand. (A plain `source` without `--as` writes `original/`, for reading only.) Re-running `--as <name>` overwrites that copy.
 - The main file is printed by `source` (`main file:`); `#include`s are resolved from the files next to it, like RenderDoc's own editor.
+- `--repeat` defaults to 5 (7 on software GPUs).
 - Keep the entry point, inputs/outputs and resource bindings unchanged; change only the body.
 - Variants compile with the captured compiler flags. Add `--flags-remove /Od --flags-add /O3` to measure optimised code (applies to all variants including `original`).
 - Without embedded source (`source` says so), only disassembly is available: either recapture with debug info (unity-shaders.md) or write a full replacement shader by hand.
@@ -36,6 +38,14 @@ per event (median):  eid 575  eid 584  eid 593  eid 602 ...
 - Remove or reduce one thing per variant (taps, loop count, a texture fetch, a branch) so the delta is attributable.
 - To prove "this part of the shader is the cost": a variant with that part replaced by a constant, and check `image vs captured` to see what it affected.
 - **Geometry or pixel cost?** Make a `--as null` copy whose pixel shader body only writes a constant colour (keep the signature and outputs: HLSL `return float4(0,0,0,1);`, GLSL `outColor = vec4(0,0,0,1);`). If the event barely gets faster, the cost is vertex/raster (geometry density, micro-triangles); if it collapses, it is the pixel shader. Then remove one feature at a time (texture fetch, light loop, shadow sampling) to find which part costs.
+
+  | null-PS result | `event` says | conclusion |
+  |---|---|---|
+  | barely faster | — | vertex/raster cost: geometry density, vertex shader, primitive count |
+  | collapses | normal px/tri | the pixel shader itself is expensive → remove features one by one |
+  | collapses | `MICRO-TRIANGLES` | the PS runs once per tiny triangle (2×2 quads, helper lanes): cost scales with triangles. Fix the mesh/LOD first; cheaper PS features only reduce it. Report both facts |
+
+  A vertex-shader variant that moves everything off-screen also removes all pixel work, so it says nothing about VS cost on its own. To compare draws that share a shader, use `tree <rdc> <pass> --metrics @cost` (ns per pixel, µs per triangle, pixels per triangle).
 - To estimate a quality/perf trade-off: two or three settings (e.g. 25/13/9 taps) in one run.
 - To test whether optimisation flags matter: the same source with `--flags-remove /Od` vs without (two runs).
 - Report: what changed (diff summary), ms before/after for the event and users, % vs original, visual impact, and how to port it to the project file.

@@ -20,7 +20,10 @@ Results go to stdout, RenderDoc progress to stderr — don't merge them (`2>&1`)
 ## 1. Setup (only when needed)
 
 - `doctor` says `STATUS: ready` → go on. Otherwise follow its message. Details and troubleshooting: [references/setup.md](references/setup.md).
-- Summary line `NVIDIA counters UNAVAILABLE` on an NVIDIA GPU → the Nsight Perf SDK is missing. Run `S setup-nvperf`. It finds/installs the SDK DLL if the user already downloaded it; otherwise it prints what the **user** must download (NVIDIA login required — you cannot do it). Relay that, continue the analysis with generic counters, and say what the NVIDIA counters would add.
+- The `COUNTERS` lines of the summary (and `doctor --capture`) say why vendor counters are or aren't there:
+  - `NVIDIA counters UNAVAILABLE: Nsight Perf SDK not installed` → run `S setup-nvperf`. It finds/installs the SDK library if the user already downloaded it (it searches Downloads/Desktop); otherwise it prints what the **user** must download (NVIDIA login required — you cannot do it). Then `S fetch <rdc> nv-pack`. Meanwhile continue with generic counters.
+  - `no vendor counters: replay GPU vendor is "..."` → this machine can't produce NVIDIA metrics (non-NVIDIA or software GPU). Don't install anything; say NVIDIA metrics need the capture replayed on an NVIDIA GPU.
+  - `NVIDIA counters available` → `fetch <rdc> nv-pack` (default `open` already did) or specific names from `metrics <rdc> <text>`.
 - `qrenderdoc ... waiting on a dialog` → ask the user to open RenderDoc once and answer its prompt.
 - Capture replay fails (`cannot be replayed on this machine`) → the capture needs the same graphics API and a compatible GPU; say so and ask the user to run the analysis on the capturing machine.
 
@@ -58,7 +61,7 @@ Names: markers come from the engine (Unity: `RenderLoop.Draw`, `DrawOpaqueObject
 
 ## 4. Shader source
 
-- `shader <rdc> <id>` shows whether the capture embeds source (`embedded source`) and where the disassembly is. Grep the disassembly file instead of reading it whole.
+- `shader <rdc> <id>` shows whether the capture embeds source and where the disassembly is; `shader <rdc> <id> --src --grep <regex>` prints matching lines of the source (or disassembly) with line numbers — prefer grep over printing whole files.
 - No embedded source (normal for Unity release shaders): use `find-source <rdc> <id> --project <unity project root>`; it ranks project/package shader files by the shader's cbuffer, texture and entry names. Ask the user for the project path if you don't know it (see §6). Unity pragmas to embed source and the `/Od` caveat: [references/unity-shaders.md](references/unity-shaders.md).
 - When you quote code, say whether it is from the embedded source, a project file match (probable), or disassembly. Embedded source is the compiled language of the capture (HLSL for D3D, GLSL/SPIR-V for GL/Vulkan) and already preprocessed; map changes back to the project `.shader`/`.hlsl` yourself.
 - A match under `Library/PackageCache/` (URP/HDRP) is read-only: propose the change in a copy (embedded package in `Packages/` or a custom shader in `Assets/`), never in the cache.

@@ -115,6 +115,32 @@ export async function drawdiff(a, b, eidA, eidB, opts) {
     } else for (const d of ds) (base.endsWith('[]') ? arrays : scalar).push([trunc(d[0], 60), trunc(d[1], 50), trunc(d[2], 50)]);
   }
   const rows = [...scalar, ...arrays];
+  // changed constants that drive loops in the shader source are the usual cause of cost changes
+  const loopHints = [];
+  for (const [stage, s] of Object.entries(y.d.stages || {})) {
+    const meta = b.shaderById.get(s.id);
+    if (!meta?.sourceDir) continue;
+    let text = '';
+    for (const f of meta.sourceFiles || []) { try { text += fs.readFileSync(path.join(b.dir, 'shaders', meta.sourceDir, f), 'utf8') + '\n'; } catch { /* ignore */ } }
+    const lines = text.split('\n').filter((l) => !/\b(uniform|cbuffer|CBUFFER_START|layout\s*\()/i.test(l));
+    for (const [k] of scalar) {
+      const name = k.split('.').pop().replace(/\[.*$/, '');
+      if (!k.startsWith(stage + '.') || name.length < 3) continue;
+      const esc = name.replace(/[$]/g, '\\$');
+      const loopRe = /\b(for|while)\s*\(/;
+      let hit = lines.find((l) => loopRe.test(l) && new RegExp(`\\b${esc}\\b`).test(l));
+      if (!hit) {
+        // indirect: v = f(name); ... for(... v ...)
+        for (const l of lines) {
+          const m = l.match(new RegExp(`(\\w+)\\s*=[^;=]*\\b${esc}\\b`));
+          if (!m) continue;
+          const loop = lines.find((x) => loopRe.test(x) && new RegExp(`\\b${m[1]}\\b`).test(x));
+          if (loop) { hit = `${l.trim()}  …  ${loop.trim()}`; break; }
+        }
+      }
+      if (hit) loopHints.push(`  ${stage} ${name}: ${trunc(hit.trim(), 140)}`);
+    }
+  }
   const out = [`A EID ${eidA} ${x.d.name} | B EID ${eidB} ${y.d.name}`];
   const ma = a.ms(eidA); const mb = b.ms(eidB);
   if (ma !== null && mb !== null) out.push(`GPU ${fmtMs(ma)} → ${fmtMs(mb)} ms`);
@@ -123,6 +149,7 @@ export async function drawdiff(a, b, eidA, eidB, opts) {
     out.push(`${rows.length} differences (arrays compared element by element):`);
     out.push(table(['what', 'A', 'B'], rows.slice(0, opts.all ? 100000 : 60), 'lll'));
     if (rows.length > 60 && !opts.all) out.push(`… ${rows.length - 60} more (--all)`);
+    if (loopHints.length) out.push('LIKELY COST DRIVERS (changed constant controls a loop in the shader source):', ...loopHints);
   }
   return out.join('\n');
 }
@@ -199,7 +226,7 @@ export async function experiment(c, eid, opts) {
   const sid = c.shaderOf(eid, stage);
   const users = sid === undefined ? null : [...c.state.values()].filter((st) => st.shaders && st.shaders[stage] === sid).map((st) => st.eid);
   const { res, dir } = await job(c, `exp${eid}`, [{
-    type: 'experiment', eid, stage, variants, counters, repeat: opts.repeat || 5, imageDir: imgDir, file: 'experiment.json',
+    type: 'experiment', eid, stage, variants, counters, repeat: opts.repeat || (/software|llvmpipe|warp/i.test(c.info.vendor || '') ? 7 : 5), imageDir: imgDir, file: 'experiment.json',
     users: users && users.length ? users : undefined, scanUsers: !(users && users.length),
   }], opts);
   taskResult(res, 'experiment');

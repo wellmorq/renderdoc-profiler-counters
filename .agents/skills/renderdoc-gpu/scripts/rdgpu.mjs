@@ -25,11 +25,11 @@ PREPARE (replays the .rdc once into a working cache; later queries are instant)
 
 QUERY (offline, instant)
   summary <rdc>                       frame overview, top passes/events/shaders
-  tree <rdc> [marker|eid|.] [--depth N] [--top N] [--min-pct P] [--metrics a,b]
+  tree <rdc> [marker|eid|.] [--depth N] [--top N] [--min-pct P] [--metrics a,b|@work|@memory|@stalls|@inst|@cost]
   top <rdc> [--by <metric>] [--in <marker|eid>] [--kind draw,dispatch] [-n N]
   event <rdc> <eid>                   counters, derived ratios, pipeline state, bound textures
   shaders <rdc> [--stage ps,cs] [--in <marker>] [-n N]
-  shader <rdc> <shader-id>            reflection, flags, disassembly/source paths, users
+  shader <rdc> <shader-id> [--src [--grep re]]   reflection, flags, users; --src prints embedded source (or disassembly)
   find <rdc> <text>                   markers, shaders (cbuffer/texture names), textures
   metrics <rdc> [filter]              collected + available counters with descriptions
   compare <before.rdc> <after.rdc> [marker] [--depth N]
@@ -88,6 +88,8 @@ const OPTIONS = {
   host: { type: 'string' },
   label: { type: 'string' },
   as: { type: 'string' },
+  src: { type: 'boolean' },
+  grep: { type: 'string' },
   resource: { type: 'string' },
   verbose: { type: 'boolean' },
   quiet: { type: 'boolean', short: 'q' },
@@ -140,6 +142,10 @@ async function main() {
       need(2, '<capture> <counter sets|names>');
       const r = await fetchCounters(args[0], args.slice(1).join(','), { ...common, repeat: num(o.repeat, 1), label: o.label });
       out(`fetched ${r.fetched} counters for ${r.events ?? 0} events${r.missing?.length ? `; missing: ${r.missing.join(', ')}` : ''}`);
+      if (!r.fetched) {
+        out(`nothing collected: ${q.vendorCounterStatus(loadCase(args[0]))}`);
+        process.exitCode = 3;
+      }
       return;
     }
     case 'summary': need(1, '<capture>'); out(q.summary(loadCase(args[0]), { n: num(o.n, 8) })); return;
@@ -164,7 +170,12 @@ async function main() {
       out(q.shaders(c, { stage: o.stage, n: num(o.n, 25), within: o.in ? c.findNodes(o.in) : null }));
       return;
     }
-    case 'shader': need(2, '<capture> <shader-id>'); out(q.shader(loadCase(args[0]), args[1])); return;
+    case 'shader': {
+      need(2, '<capture> <shader-id>');
+      const c = loadCase(args[0]);
+      out(o.src || o.grep ? q.shaderSource(c, args[1], { grep: o.grep, all: o.all }) : q.shader(c, args[1]));
+      return;
+    }
     case 'find': need(2, '<capture> <text>'); out(q.find(loadCase(args[0]), args.slice(1).join(' '))); return;
     case 'metrics': need(1, '<capture> [filter]'); out(q.metrics(loadCase(args[0]), args[1])); return;
     case 'compare': {
@@ -190,7 +201,7 @@ async function main() {
     case 'experiment': {
       need(2, '<capture> <eid> --variant label=file ...');
       out(await live.experiment(loadCase(args[0]), Number(args[1]), {
-        ...common, stage: o.stage, variant: o.variant, counters: o.counters, repeat: num(o.repeat, 5),
+        ...common, stage: o.stage, variant: o.variant, counters: o.counters, repeat: o.repeat ? Number(o.repeat) : undefined,
         flagsRemove: o['flags-remove'], flagsAdd: o['flags-add'], images: o.images, noOriginal: o['no-original'],
         encoding: o.encoding, entry: o.entry,
       }));

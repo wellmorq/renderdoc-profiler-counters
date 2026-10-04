@@ -28,22 +28,27 @@ function workSummary(c) {
 
 export function counterStatus(c) {
   const lines = [];
-  const fam = {};
-  for (const x of c.catalog.values()) fam[x.family] = (fam[x.family] || 0) + 1;
-  const nvErr = (c.info.counterErrors || []).find((e) => /Nsight Perf/i.test(e));
   for (const s of c.counterSources) {
     if (!s.counters) { if (s.missing.length) lines.push(`${s.label}: none fetched; missing ${s.missing.slice(0, 4).join(', ')}`); continue; }
     lines.push(`${s.label}: ${s.counters} counters${s.repeat > 1 ? ` (median of ${s.repeat} runs)` : ''}${s.missing.length ? `, missing ${s.missing.length}: ${s.missing.slice(0, 4).join(', ')}${s.missing.length > 4 ? ', …' : ''}` : ''}`);
   }
-  if (nvErr) {
-    lines.push(`NVIDIA counters UNAVAILABLE: "${nvErr}" -> run \`setup-nvperf\`, then \`open --force\` or \`fetch nv-pack\``);
-  } else if (c.info.vendor === 'nVidia' || c.info.vendor === 'NVIDIA' || fam.nvidia) {
-    if (!fam.nvidia) lines.push('NVIDIA GPU but no NVIDIA counters enumerated (unsupported GPU/driver?)');
-    else lines.push(`NVIDIA counters available: ${fam.nvidia} (fetch more with \`fetch <capture> <preset|names>\`)`);
-  } else {
-    lines.push(`vendor counters: ${Object.entries(fam).filter(([k]) => k !== 'generic').map(([k, v]) => `${k} ${v}`).join(', ') || 'none for this GPU/API'}`);
-  }
+  lines.push(vendorCounterStatus(c));
   return lines;
+}
+
+// Why vendor counters are (not) there: SDK missing vs non-NVIDIA/software replay GPU vs available.
+export function vendorCounterStatus(c) {
+  const fam = {};
+  for (const x of c.catalog.values()) if (!x.name.startsWith('ERROR:')) fam[x.family] = (fam[x.family] || 0) + 1;
+  const err = (c.info.counterErrors || [])[0];
+  const vendor = c.info.vendor || '?';
+  if (err && /not supported/i.test(err)) return `NVIDIA counters UNAVAILABLE: Nsight Perf SDK library too old for this RenderDoc -> user downloads the newest SDK, then \`setup-nvperf --from <file>\` and \`fetch <rdc> nv-pack\``;
+  if (err) return `NVIDIA counters UNAVAILABLE: Nsight Perf SDK not installed (replay GPU is NVIDIA) -> \`setup-nvperf\`, then \`fetch <rdc> nv-pack\``;
+  if (fam.nvidia) return `NVIDIA counters available: ${fam.nvidia} (\`metrics <rdc> <text>\` to browse, \`fetch <rdc> <preset|names>\` to collect)`;
+  if (/nvidia/i.test(vendor)) return 'NVIDIA replay GPU but RenderDoc offers no NVIDIA counters (GPU/driver/API not supported by Nsight Perf)';
+  const other = Object.entries(fam).filter(([k]) => k !== 'generic').map(([k, v]) => `${k} ${v}`).join(', ');
+  if (other) return `vendor counters available: ${other}`;
+  return `no vendor counters: replay GPU vendor is "${vendor}". NVIDIA metrics need the capture replayed on an NVIDIA GPU (+ Nsight Perf SDK); installing the SDK here changes nothing`;
 }
 
 export function engineHint(c) {
@@ -126,6 +131,7 @@ export function summary(c, opts = {}) {
       out.push(shaderTable(c, sh.slice(0, opts.n || 6), frame));
     }
   }
+  if (/software|llvmpipe|warp/i.test(c.info.vendor || '') || c.info.degraded) out.push('', 'REMINDER replay is on a software/degraded GPU: only relative numbers are meaningful.');
   out.push('', 'NEXT  tree <capture> [marker] | top <capture> --in <marker> | event <capture> <eid> | shaders <capture> | shader <capture> <id>');
   return out.join('\n');
 }
@@ -157,13 +163,22 @@ export function tree(c, query, opts = {}) {
   const depth = opts.depth ?? 2;
   const topN = opts.top ?? 12;
   const minPct = opts.minPct ?? 0;
-  const metrics = c.expandMetrics(opts.metrics || [], nodes.flatMap((n) => c.workUnder(n)));
+  const wantCost = (opts.metrics || []).includes('@cost');
+  const metrics = c.expandMetrics((opts.metrics || []).filter((m) => m !== '@cost'), nodes.flatMap((n) => c.workUnder(n)));
   const lines = [];
-  const header = ['ms', '%frame', 'draws', 'disp', ...metrics.map(shortMetric), 'name @eid'];
+  const costCols = wantCost ? ['ns/px', 'µs/tri', 'px/tri'] : [];
+  const header = ['ms', '%frame', 'draws', 'disp', ...metrics.map(shortMetric), ...costCols, 'name @eid'];
   const rows = [];
   const fmtAgg = (evs) => {
-    const ag = c.aggregate(evs, metrics);
-    return metrics.map((m) => (ag[m].v === null ? '-' : (ag[m].how === 'wavg' ? '~' : '') + fmtNum(ag[m].v)));
+    const keys = [...new Set([...metrics, ...(wantCost ? ['ps', 'rastPrims'].filter((k) => c.hasMetric(k)) : [])])];
+    const ag = c.aggregate(evs, keys);
+    const cols = metrics.map((m) => (ag[m].v === null ? '-' : (ag[m].how === 'wavg' ? '~' : '') + fmtNum(ag[m].v)));
+    if (wantCost) {
+      const ms = evs.reduce((s, e) => s + (c.ms(e.eid) || 0), 0);
+      const ps = ag.ps?.v; const tri = ag.rastPrims?.v;
+      cols.push(ps ? ((ms * 1e6) / ps).toFixed(1) : '-', tri ? ((ms * 1e3) / tri).toFixed(3) : '-', tri && ps !== undefined ? (ps / tri).toFixed(2) : '-');
+    }
+    return cols;
   };
   const visit = (a, d) => {
     const isGroup = a.children > 0;
@@ -188,13 +203,14 @@ export function tree(c, query, opts = {}) {
       const hidden = kids.filter((k) => !keep.has(k.eid));
       kids.filter((k) => keep.has(k.eid)).forEach((k) => visit(k, d + 1));
       const hms = hidden.reduce((s, k) => s + msOf(k), 0);
-      rows.push([fmtMs(hms), frame ? fmtPct((hms / frame) * 100) : '-', '', '', ...metrics.map(() => ''), '  '.repeat(d + 1) + `… ${hidden.length} more siblings (use --top N)`]);
+      rows.push([fmtMs(hms), frame ? fmtPct((hms / frame) * 100) : '-', '', '', ...metrics.map(() => ''), ...costCols.map(() => ''), '  '.repeat(d + 1) + `… ${hidden.length} more siblings (use --top N)`]);
     } else {
       kids.forEach((k) => visit(k, d + 1));
     }
   };
   for (const n of nodes.slice(0, opts.maxRoots ?? 6)) visit(n, 0);
-  lines.push(table(header, rows, 'rrrr' + 'r'.repeat(metrics.length) + 'l'));
+  lines.push(table(header, rows, 'rrrr' + 'r'.repeat(metrics.length + costCols.length) + 'l'));
+  if (wantCost) lines.push('ns/px = ms per ps invocation, µs/tri = ms per rasterized triangle, px/tri = shaded pixels per triangle (compare draws that share a shader)');
   if (nodes.length > (opts.maxRoots ?? 6)) lines.push(`(${nodes.length - (opts.maxRoots ?? 6)} more matching roots not shown)`);
   if (query && nodes.length > 1) {
     const evs = nodes.flatMap((n) => c.workUnder(n));
@@ -238,11 +254,13 @@ function derived(c, eid) {
     const px = st.viewport[2] * st.viewport[3];
     if (px > 0) d.push(`ps invocations / viewport pixels = ${(v.ps / px).toFixed(2)} (≈ shaded-pixel coverage incl. overdraw; quads/MSAA inflate it)`);
   }
-  if (ms && v.ps) d.push(`ns per ps invocation = ${((ms * 1e6) / v.ps).toFixed(3)}`);
+  const micro = v.rastPrims > 10000 && v.ps !== undefined && v.ps / v.rastPrims < 1;
+  if (ms && v.ps && !micro) d.push(`ns per ps invocation = ${((ms * 1e6) / v.ps).toFixed(3)}`);
+  if (ms && v.rastPrims) d.push(`µs per rasterized triangle = ${((ms * 1e3) / v.rastPrims).toFixed(4)}`);
   if (v.rastPrims && v.ps !== undefined) {
     const ppt = v.ps / v.rastPrims;
     const line = `shaded pixels per rasterized triangle = ${ppt.toFixed(2)}`;
-    if (ppt < 1 && v.rastPrims > 10000) d.unshift(line + '  <-- MICRO-TRIANGLES: geometry far denser than its screen size (vertex/raster/quad-overshading bound; LOD problem). ns per pixel is misleading here');
+    if (ppt < 1 && v.rastPrims > 10000) d.unshift(line + '  <-- MICRO-TRIANGLES: mesh far denser than its screen size. Every tiny triangle still launches pixel-shader quads (2x2, helper lanes not counted in ps), so both vertex work and PS work scale with triangles, not pixels. A constant-PS experiment collapsing does NOT mean the shader itself is slow — the fix is LOD/mesh density; report both.');
     else d.push(line);
   }
   if (v.verts && v.vs !== undefined) d.push(`vs invocations / input vertices = ${(v.vs / v.verts).toFixed(2)} (<1 = post-transform cache reuse)`);
@@ -352,6 +370,29 @@ export function shaders(c, opts = {}) {
   return out.join('\n');
 }
 
+export function shaderSource(c, idSpec, opts = {}) {
+  const s = c.shaderById.get(Number.isNaN(Number(idSpec)) ? idSpec : Number(idSpec)) || c.shaderById.get(idSpec);
+  if (!s) return `Shader ${idSpec} not found.`;
+  const dir = s.sourceDir ? path.join(c.dir, 'shaders', s.sourceDir) : null;
+  const files = dir ? s.sourceFiles.map((f) => path.join(dir, f)) : Object.values(s.disasm || {}).map((f) => path.join(c.dir, 'shaders', f));
+  const kind = dir ? `embedded source (${s.sourceEncoding || s.encoding})` : `disassembly (no embedded source)`;
+  const out = [`shader ${s.id} ${s.stage} ${s.name || ''} — ${kind}`];
+  const re = opts.grep ? new RegExp(opts.grep, 'i') : null;
+  for (const f of files) {
+    let lines = [];
+    try { lines = fs.readFileSync(f, 'utf8').split(/\r?\n/); } catch { continue; }
+    out.push(`=== ${f} (${lines.length} lines)`);
+    if (re) {
+      lines.forEach((l, i) => { if (re.test(l)) out.push(`${String(i + 1).padStart(5)}: ${l}`); });
+    } else {
+      const max = opts.all ? lines.length : 400;
+      lines.slice(0, max).forEach((l, i) => out.push(`${String(i + 1).padStart(5)}: ${l}`));
+      if (lines.length > max) out.push(`… ${lines.length - max} more lines (--all, or --grep <regex>)`);
+    }
+  }
+  return out.join('\n');
+}
+
 export function shader(c, idSpec) {
   const s = c.shaderById.get(Number.isNaN(Number(idSpec)) ? idSpec : Number(idSpec)) || c.shaderById.get(idSpec);
   if (!s) return `Shader ${idSpec} not found. Use \`shaders\` to list ids.`;
@@ -361,7 +402,7 @@ export function shader(c, idSpec) {
   if (cmd) out.push(`compile flags: ${cmd[1] || '(none recorded)'}${isDebugCompiled(s) ? '   <- optimisation DISABLED: timings of draws using this shader are not representative' : ''}`);
   const st = shaderStats(c, s);
   out.push(`static: ${statsLabel(st) || 'n/a'}${st.hash ? `  disasm hash ${st.hash}` : ''}`);
-  for (const [t, f] of Object.entries(s.disasm || {})) out.push(`disassembly (${t}): ${path.join(c.dir, 'shaders', f)}`);
+  for (const [t, f] of Object.entries(s.disasm || {})) out.push(`disassembly (${t}): ${path.join(c.dir, 'shaders', f)}  (print: shader <rdc> ${s.id} --src [--grep re])`);
   if (s.sourceDir) {
     out.push(`embedded source (${s.sourceFiles.length} files): ${path.join(c.dir, 'shaders', s.sourceDir)}`);
     out.push(...s.sourceFiles.slice(0, 8).map((f) => '  ' + f));
@@ -431,6 +472,7 @@ export function metrics(c, filter) {
   const out = [];
   const q = (filter || '').toLowerCase();
   const collected = c.metricKeys().filter((k) => !q || k.toLowerCase().includes(q));
+  if (!collected.length && q) out.push(`No collected counter matches "${filter}".`);
   out.push(`COLLECTED (${collected.length}) — use these names with --by/--metrics:`);
   out.push(table(['metric', 'unit', 'aggregate', 'meaning'], collected.map((k) => {
     const cat = [...c.catalog.values()].find((x) => c.keyFor(x.name) === k);

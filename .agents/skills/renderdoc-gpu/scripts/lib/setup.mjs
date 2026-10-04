@@ -5,6 +5,7 @@ import path from 'node:path';
 import zlib from 'node:zlib';
 import { chooseHost, configPath, findPythonHost, findQRenderDoc, IS_WIN, nodeOk, nvPluginDir, nvPluginFiles } from './env.mjs';
 import { runJob } from './runner.mjs';
+import { vendorCounterStatus } from './query.mjs';
 
 export const NVPERF_URL = 'https://developer.nvidia.com/nsight-perf-sdk/get-started';
 const DLL_RE = IS_WIN ? /(^|[\\/])nvperf_grfx_host\.dll$/i : /(^|[\\/])libnvperf_grfx_host\.so(\.[\d.]+)?$/i;
@@ -208,8 +209,8 @@ export async function doctor(opts = {}) {
           const fam = {};
           for (const c of info.counters) fam[c.family] = (fam[c.family] || 0) + 1;
           lines.push(`capture: ${info.api}, replay vendor ${info.vendor}${info.degraded ? ' (DEGRADED)' : ''}; counters: ${Object.entries(fam).map(([k, v]) => `${k} ${v}`).join(', ')}`);
-          for (const e of info.counterErrors || []) { lines.push(`  counter backend: ${e}`); ready = false; }
-          if (/nvidia/i.test(info.vendor) && !fam.nvidia) { lines.push('  NVIDIA GPU but no NVIDIA counters — check Nsight Perf SDK install / GPU support'); ready = false; }
+          lines.push(`  vendor counters: ${vendorCounterStatus({ info, catalog: new Map(info.counters.map((x) => [x.name, x])) })}`);
+          if ((info.counterErrors || []).length) ready = false;
         }
       }
     } catch (e) {
@@ -225,11 +226,10 @@ export async function doctor(opts = {}) {
   if (nv.length) {
     for (const f of nv) {
       const st = fs.statSync(f);
-      lines.push(`  ${path.basename(f)}  ${(st.size / 1048576).toFixed(1)} MB  ${st.mtime.toISOString().slice(0, 10)}`);
+      lines.push(`  ${path.basename(f)}  ${st.size.toLocaleString('en-US')} bytes  ${st.mtime.toISOString().slice(0, 10)}`);
     }
   } else {
-    lines.push('  MISSING — NVIDIA hardware counters disabled. Fix: setup-nvperf (it explains what the user must download).');
-    if (!opts.capture) lines.push('  (only matters on NVIDIA GPUs)');
+    lines.push('  MISSING — only matters when captures are replayed on an NVIDIA GPU. Fix: setup-nvperf (it explains what the user must download).');
   }
   lines.push(ready ? 'STATUS: ready' : 'STATUS: action needed (see above)');
   return { ready, text: lines.join('\n') };
