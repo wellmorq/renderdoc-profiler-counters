@@ -35,7 +35,7 @@ Every row: signals to look for (CLI output) → plain explanation → how to con
 
 ## Shader execution
 
-**Long loops / many texture reads per pixel**: static stats `loop`, `tex`; `drawdiff` `LIKELY COST DRIVERS`; high `ns/px` on fullscreen passes. "The blur reads the texture 625 times for every pixel (a 25×25 kernel)."
+**Long loops / many texture reads per pixel**: static stats `loop`, `tex`; `draw` → `LOOP BOUNDS FROM CONSTANTS` (`_BlurTaps = 9; 2 loops → ~81 iterations per pixel`); `drawdiff` `LIKELY COST DRIVERS`; high `ns/px` on fullscreen passes, the biggest mip/level costing more than all smaller ones together. "The blur reads the texture 81 times for every pixel (a 9×9 window) and recomputes the same weights each time; the first, largest level has 4× the pixels of the next one, so it alone is most of the cost." → separable blur (9+9 reads instead of 81), bilinear tap pairing, precomputed weights, start from a lower resolution.
 
 **Expensive texture reads (bandwidth / cache misses)**: `event` → `ps reads:` uncompressed or float formats (`R32G32B32A32_FLOAT`, `R16G16B16A16_FLOAT`), large sizes, `mips=1` on textures that are minified; NVIDIA L1/L2 hit rates low, `long_scoreboard`/`tex_throttle` stalls high. "The shader samples a 4096² uncompressed float texture without mipmaps; neighbouring pixels read far-apart texels, so the caches keep missing and the GPU waits for memory." → compressed formats (BC6H/BC7), mipmaps, lower precision.
 
@@ -53,6 +53,7 @@ Every row: signals to look for (CLI output) → plain explanation → how to con
 
 - **Duplicate geometry passes**: depth prepass and GBuffer with the same `verts` (`tree <pass> --metrics @work`). "All geometry is processed twice; the prepass only pays off when it prevents a lot of expensive pixel shading."
 - **Pass count changes** (`compare` → `draws 4 → 21`, new markers): more passes cost fixed setup per pass plus their own writes; check whether the added passes or a format change dominates (`ropBytes`, per-marker ms).
+- **Faster in ms, heavier in work** (`compare` → `VERDICT … FASTER in this replay but HEAVIER in work`): a cheaper shader can hide a big growth in output bytes, especially on a software replay that has no real memory-bandwidth limit. Report the measured win and the work growth as a risk with its size ("~14× more bytes written"), and how to confirm it on hardware (NVIDIA `nv-rop`/`nv-memory`, or a capture replayed on the target GPU).
 - **Full-resolution post effects**: fullscreen pass at native resolution with high `ns/px` — consider half resolution.
 
 ## Wording rules for the answer

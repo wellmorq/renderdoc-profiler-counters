@@ -51,16 +51,66 @@ function explain(name, A, B, metrics) {
   return parts.join('; ');
 }
 
+// One-line answer to "slower or faster, and is it the same work?" for a region (or the frame).
+function verdict(label, A, B, metrics, noise) {
+  if (!A.ms || B.ms === null) return null;
+  const dms = B.ms / A.ms - 1;
+  const pct = (v) => `${v >= 0 ? '+' : ''}${(v * 100).toFixed(0)}%`;
+  const grew = []; const shrank = [];
+  for (const m of metrics) {
+    const a = A.ag[m]?.v; const b = B.ag[m]?.v;
+    if (!a || b === null || b === undefined) continue;
+    const r = b / a - 1;
+    if (r > 0.1) grew.push(`${shortMetric(m)} ${pct(r)}`);
+    else if (r < -0.1) shrank.push(`${shortMetric(m)} ${pct(r)}`);
+  }
+  const inNoise = noise !== null && Math.abs(dms * 100) <= noise;
+  const t = `${fmtMs(A.ms)} → ${fmtMs(B.ms)} ms (${pct(dms)}${inNoise ? ', within noise' : ''})`;
+  const g = grew.length ? `more work: ${grew.join(', ')}` : '';
+  const sh = shrank.length ? `less work: ${shrank.join(', ')}` : '';
+  const draws = A.draws !== B.draws ? `draws ${A.draws}→${B.draws}` : '';
+  const facts = [draws, g, sh].filter(Boolean).join('; ') || 'same work';
+  let read;
+  if (inNoise) read = grew.length ? 'time unchanged within noise but work grew — may show up on a real GPU' : 'no measurable change';
+  else if (dms < 0 && grew.length) read = 'FASTER in this replay but HEAVIER in work: the win comes from cheaper per-item cost (shader); the extra work (especially ropBytes = output bandwidth) can eat it on a real GPU — report both';
+  else if (dms < 0 && (shrank.length || draws)) read = 'faster, with less or restructured work';
+  else if (dms < 0) read = 'faster with the same work: per-item cost dropped (constants/loops, textures, shader code) or replay noise → drawdiff';
+  else if (grew.length) read = 'SLOWER and more work: compare which work metric grew in proportion to time (ropBytes → formats/blending, ps → pixels/overdraw, verts → geometry)';
+  else read = 'SLOWER with the same work: per-item cost grew (constants/loops, textures, shader code) → drawdiff';
+  return `VERDICT ${label}: ${t}; ${facts} → ${read}`;
+}
+
+// Markers whose work counters did not change still move between replays; their spread is the noise floor.
+function noiseFloor(rows, metrics, frame) {
+  const same = rows.filter((r) => r.sa && r.sb && r.sa.ms && r.sa.draws === r.sb.draws && r.sa.ms >= frame * 0.01
+    && metrics.every((m) => { const a = r.sa.ag[m]?.v; const b = r.sb.ag[m]?.v; return !a || (b !== null && b !== undefined && Math.abs(b / a - 1) < 0.03); }));
+  if (same.length < 2) return null;
+  const d = same.map((r) => (r.sb.ms / r.sa.ms - 1) * 100).sort((x, y) => x - y);
+  // time-weighted median of |Δ|: big markers are measured more reliably than tiny ones
+  const w = same.map((r) => ({ v: Math.abs((r.sb.ms / r.sa.ms - 1) * 100), w: r.sa.ms })).sort((x, y) => x.v - y.v);
+  const tot = w.reduce((s2, x) => s2 + x.w, 0);
+  let acc = 0; let med = w[w.length - 1].v;
+  for (const x of w) { acc += x.w; if (acc >= tot / 2) { med = x.v; break; } }
+  const oneWay = d.every((v) => v < -3) || d.every((v) => v > 3);
+  return { n: same.length, med, min: d[0], max: d[d.length - 1], oneWay, limit: Math.max(5, med * 1.25) };
+}
+
 export function compare(A, B, marker, opts = {}) {
   const out = [];
   const fa = A.frameMs(); const fb = B.frameMs();
   out.push(`A ${A.meta.capture}: ${A.info.api} ${A.info.vendor}, ${fmtMs(fa)} ms, ${A.frameEvents().filter((e) => e.kind === 'draw').length} draws`);
   out.push(`B ${B.meta.capture}: ${B.info.api} ${B.info.vendor}, ${fmtMs(fb)} ms, ${B.frameEvents().filter((e) => e.kind === 'draw').length} draws`);
   out.push(`frame Δ ${fmtMs(fb - fa)} ms (${fmtDelta(fa, fb)})  [sum of per-event GPU durations in replay]`);
+  const ka = new Set(A.metricKeys()); const kb = new Set(B.metricKeys());
+  const metrics = (opts.metrics || WORK_METRICS).filter((m) => ka.has(m) && kb.has(m));
+  const workOf = (c) => c.frameEvents().filter((e) => WORK_KINDS.has(e.kind));
+  const frA = regionStats(A, workOf(A), metrics); const frB = regionStats(B, workOf(B), metrics);
+  const fw = metrics.filter((m) => ['ps', 'verts', 'samples', 'cs', 'ropBytes', 'vtxBytes'].includes(m) && frA.ag[m]?.v)
+    .map((m) => `${shortMetric(m)} ${fmtDelta(frA.ag[m].v, frB.ag[m].v)}`);
+  if (fw.length) out.push(`frame work Δ: ${fw.join(', ')}`);
   const warn = [];
   if (A.info.api !== B.info.api) warn.push(`different API (${A.info.api} vs ${B.info.api})`);
   if (A.info.vendor !== B.info.vendor) warn.push(`replayed on different GPU vendors (${A.info.vendor} vs ${B.info.vendor})`);
-  const ka = new Set(A.metricKeys()); const kb = new Set(B.metricKeys());
   const onlyA = [...ka].filter((k) => !kb.has(k)); const onlyB = [...kb].filter((k) => !ka.has(k));
   if (onlyA.length || onlyB.length) warn.push(`counter sets differ (only A: ${onlyA.slice(0, 4).join(', ') || '-'}; only B: ${onlyB.slice(0, 4).join(', ') || '-'})`);
   const mainTex = (c) => { const t = (c.info.textures || []).filter((x) => /RenderTarget|ColorTarget|SwapBuffer/i.test(x.flags || '')).sort((x, y) => (y.w * y.h) - (x.w * x.h))[0]; return t ? `${t.w}x${t.h}` : '?'; };
@@ -72,8 +122,7 @@ export function compare(A, B, marker, opts = {}) {
   const rootsB = marker ? B.findNodes(marker) : B.roots;
   if (marker && (!rootsA.length || !rootsB.length)) return out.concat(`marker "${marker}" not found in ${!rootsA.length ? 'A' : 'B'}`).join('\n');
   if (marker && (rootsA.length > 1 || rootsB.length > 1)) out.push(`note: "${marker}" matches ${rootsA.length} node(s) in A and ${rootsB.length} in B; regions are compared as unions`);
-  const metrics = (opts.metrics || WORK_METRICS).filter((m) => ka.has(m) && kb.has(m));
-
+  let regionVerdict = null;
   if (marker) {
     const ra = regionStats(A, rootsA.flatMap((n) => A.workUnder(n)), metrics);
     const rb = regionStats(B, rootsB.flatMap((n) => B.workUnder(n)), metrics);
@@ -86,6 +135,7 @@ export function compare(A, B, marker, opts = {}) {
     ], 'lrrr'));
     const e = explain(marker, ra, rb, metrics);
     if (e) out.push('reading: ' + e);
+    regionVerdict = { label: `"${marker}"`, ra, rb };
   }
 
   const ma = keyedMarkers(A, rootsA.flatMap((n) => (marker ? A.kids(n) : [n])));
@@ -102,6 +152,25 @@ export function compare(A, B, marker, opts = {}) {
     rows.push({ k, d, x, y, sa, sb, delta: (sb?.ms || 0) - (sa?.ms || 0) });
   }
   rows.sort((p, r) => Math.abs(r.delta) - Math.abs(p.delta));
+  const noise = noiseFloor(rows, metrics, fa || 0);
+  const verdicts = [];
+  if (regionVerdict) verdicts.push(verdict(regionVerdict.label, regionVerdict.ra, regionVerdict.rb, metrics, noise?.limit ?? null));
+  else {
+    verdicts.push(verdict('frame', frA, frB, metrics, noise?.limit ?? null));
+    const workChanged = (r) => r.sa.draws !== r.sb.draws || metrics.some((m) => { const a = r.sa.ag[m]?.v; const b = r.sb.ag[m]?.v; return a && b && Math.abs(b / a - 1) > 0.1; });
+    const interesting = rows.filter((x) => x.d > 0 && x.sa && x.sb && x.sa.ms >= (fa || 0) * 0.02
+      && (workChanged(x) || !noise || Math.abs((x.sb.ms / x.sa.ms - 1) * 100) > noise.limit));
+    interesting.sort((p, q) => Number(workChanged(q)) - Number(workChanged(p)));
+    for (const r of interesting.slice(0, 3)) {
+      verdicts.push(verdict(`"${trunc(r.k.split(SEP).pop(), 40)}"`, r.sa, r.sb, metrics, noise?.limit ?? null));
+    }
+  }
+  const vl = verdicts.filter(Boolean);
+  if (vl.length) out.push('', ...vl);
+  if (noise) {
+    out.push(`NOISE   ${noise.n} markers with unchanged work moved ${noise.min.toFixed(0)}%..${noise.max >= 0 ? '+' : ''}${noise.max.toFixed(0)}% (typical |Δ| ${noise.med.toFixed(0)}%, time-weighted)`
+      + `${noise.oneWay ? ' all in one direction → a global shift between replays (load/clocks): compare shares of the frame, not raw ms' : ''}; treat |Δ| ≤ ${noise.limit.toFixed(0)}% on other markers as noise unless work changed`);
+  }
   const shown = rows.slice(0, opts.n || 20);
   const segs = (k) => k.split(SEP).slice(1);
   const first = shown.length ? segs(shown[0].k)[0] : null;

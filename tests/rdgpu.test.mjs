@@ -148,6 +148,7 @@ test('compare explains work vs cost and flags changed shader code', () => {
   assert.match(r.out, /CHANGED/);
   const r2 = cli(['compare', a, b, 'Bloom']);
   assert.match(r2.out, /REGION/);
+  assert.match(r2.out, /VERDICT "Bloom": .*more work: ps \+300%/);
 });
 
 test('shaderStats parses DXBC disassembly', () => {

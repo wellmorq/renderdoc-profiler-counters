@@ -37,17 +37,18 @@ Results go to stdout, RenderDoc progress to stderr — don't merge them (`2>&1`)
 
 | Question | Commands, in order |
 |---|---|
-| "What is slow / where does the frame go?" | `open` → `tree <rdc> . --depth 2` → `top <rdc> --in <pass>` → `event <rdc> <eid>` → `shaders <rdc>` |
-| "Why is pass/draw X slow?" | `tree <rdc> X --metrics @work` (footer: draw-time distribution, draws with 0 pixels) → `event` on its top events → `draw <rdc> <eid>` for constants/textures → counters (§3) |
+| "What is slow / where does the frame go?" | `open` → `tree <rdc> . --passes --depth 3 --sort ms` (passes only, heaviest first) → `top <rdc> --in <pass>` → `event <rdc> <eid>` → `shaders <rdc>` |
+| "Why is pass/draw X slow?" | `tree <rdc> X --metrics @work --sort ms` (footer: draw-time distribution, draws with 0 pixels) → `event` on its top events → `draw <rdc> <eid>` for constants/textures → counters (§3) |
+| "Why is this fullscreen/post pass slow?" (bloom, blur, SSAO, UberPost) | `event <rdc> <eid>` (ns/pixel, formats) → `draw <rdc> <eid>` — its `LOOP BOUNDS FROM CONSTANTS` block gives the iterations per pixel (e.g. `_BlurTaps = 9`, nested → 81 reads) → `shader <rdc> <id> --src --grep "for *\(" -C 4` for the loop body |
 | "Which shader costs most / where is its code?" | `shaders <rdc>` → `shader <rdc> <id>` → `find-source <rdc> <id> --project <path>` |
 | "What does this pass render?" | `rt <rdc> <eid>` → open the PNG (your file/image viewing tool) |
-| "Before vs after — what regressed?" | `open` both → `compare <before> <after>` → for "SAME WORK, DIFFERENT COST" lines run the printed `drawdiff <before> <after> <eid>` (changed constants/textures/state) → `compare <before> <after> <marker>` for details |
+| "Before vs after — what regressed?" | `open` both (two commands; they can run in parallel) → `compare <before> <after>` (read the `VERDICT` and `NOISE` lines first) → for "SAME WORK, DIFFERENT COST" lines run the printed `drawdiff <before> <after> <eid>` (changed constants/textures/state) → `compare <before> <after> <marker>` for details |
 | "Would change Y make it faster?" / "is it geometry or pixel cost?" | `source <rdc> <eid> --as <name>` (editable copy) → edit its main file → `experiment <rdc> <eid> --variant <name>=<file>` — read [references/experiments.md](references/experiments.md) first |
 | Need a counter that is not collected | `metrics <rdc> <text>` (shows available ones) → `fetch <rdc> <names or preset>` |
 
-`--metrics` / `--by` accept full counter names, the short names printed in table headers (`ps`, `verts`, `dramRd`, `L1hit%`, `stall_long_scoreboard%`, `inst_ps`), and groups: `@work` (pixels, vertices, primitives, samples, threads), `@memory` (DRAM bytes, L1/L2 hit), `@inst` (instructions per stage), `@stalls` (the 3 largest stall reasons in that region).
+`--metrics` / `--by` accept full counter names, the short names printed in table headers (`ps`, `verts`, `dramRd`, `L1hit%`, `stall_long_scoreboard%`, `inst_ps`), and groups: `@work` (pixels, vertices, primitives, samples, threads), `@memory` (DRAM bytes, L1/L2 hit), `@inst` (instructions per stage), `@stalls` (the 3 largest stall reasons in that region), `@bytes` (`ropBytes`, `vtxBytes` estimates). `top` takes `--metrics` too (e.g. `top <rdc> --in Bloom --metrics ropBytes`).
 
-Narrowing rule: go frame → pass (marker) → top events → one event → its shader. Stop when the evidence answers the question. Prefer `--in`, `-n`, `--depth` over dumping everything.
+Narrowing rule: go frame → pass (marker) → top events → one event → its shader. Stop when the evidence answers the question. Prefer `--passes`, `--in`, `-n`, `--depth` over dumping everything (`tree . --depth 2` without `--passes` lists every draw in Unity captures, because each draw sits in its own `RenderLoop.Draw` marker).
 
 Names: markers come from the engine (Unity: `RenderLoop.Draw`, `DrawOpaqueObjects`, `Render.OpaqueGeometry`, URP/HDRP pass names). Match with any substring; `tree`/`top --in` also accept an EID. `find <rdc> <text>` searches markers, shader names, cbuffer variable and texture names.
 
@@ -63,13 +64,14 @@ Names: markers come from the engine (Unity: `RenderLoop.Draw`, `DrawOpaqueObject
 - State evidence beats guesses: `event` shows the vertex layout (attributes, bytes per vertex), interpolant count, colour formats with bytes per pixel and blending, sampled texture formats/sizes/mips and register-pressure hints; `ropBytes`/`vtxBytes` (`--metrics @bytes`) estimate output and vertex-fetch traffic; `compare` lists `STATE / FORMAT CHANGES` per changed pass. Use NVIDIA sets `nv-rop`, `nv-spill`, `nv-geometry` (in `nv-pack`) to confirm.
 - `ps / viewport pixels` from `event` ≈ how many times each screen pixel was shaded by that draw (overdraw/coverage). Fullscreen passes ≈ 1.0. `MICRO-TRIANGLES` (<1 shaded pixel per triangle) means the cost is geometry density, not the pixel shader — don't read `ns per ps invocation` as shader cost then.
 - `tree` footer for a marker: draw-time percentiles and how much time goes to draws that produce **0 pixels** (occluded/off-screen work) — a common Unity finding (missing occlusion culling, duplicate depth prepass).
-- `WARNING replay GPU is a SOFTWARE rasterizer` (or `DEGRADED`): relative numbers only; clears and texture-heavy events are distorted. Say so in the answer. Between two such captures, treat a per-event time change as real only when `drawdiff` (or work counters / shader code) shows a matching difference; otherwise call it noise.
+- `WARNING replay GPU is a SOFTWARE rasterizer` (or `DEGRADED`): relative numbers only (say "share of the frame", not "costs X ms on the GPU"); clears and texture-heavy events are distorted, and memory bandwidth/ROP limits of a real GPU don't show up in ms at all — they show up only in work estimates (`ropBytes`, formats). Say so in the answer. Between two such captures, treat a per-event time change as real only when `drawdiff` (or work counters / shader code) shows a matching difference; otherwise call it noise.
+- `compare` prints `VERDICT` lines (time vs work per changed pass) and a `NOISE` line: how much markers with unchanged work moved between the two replays. Changes inside that band are not evidence; "all in one direction" means a global shift — compare shares of the frame.
 - `summary` prints FINDINGS — heuristic leads (dominant draw, micro-triangles, 0-pixel draws, overdraw, expensive fullscreen passes, `/Od` shaders, software-replay artifacts). Verify each before reporting it; if the user asks for "top N" and fewer real problems exist, give fewer and say why — never pad the list with artifacts.
 - Repeats: `--repeat N` on `open`/`fetch`/`experiment` stores min–max; `event` shows the range. When ranges of two things overlap, the difference is not proven.
 
 ## 4. Shader source
 
-- `shader <rdc> <id>` shows whether the capture embeds source and where the disassembly is; `shader <rdc> <id> --src --grep <regex>` prints matching lines of the source (or disassembly) with line numbers — prefer grep over printing whole files.
+- `shader <rdc> <id>` shows whether the capture embeds source and where the disassembly is; `shader <rdc> <id> --src --grep <regex> -C <lines>` prints matching lines of the source (or disassembly) with line numbers and context (default 2) — prefer grep over printing whole files; raise `-C` to read a loop body.
 - No embedded source (normal for Unity release shaders): use `find-source <rdc> <id> --project <unity project root>`; it ranks project/package shader files by the shader's cbuffer, texture and entry names. Ask the user for the project path if you don't know it (see §6). Unity pragmas to embed source and the `/Od` caveat: [references/unity-shaders.md](references/unity-shaders.md).
 - When you quote code, say whether it is from the embedded source, a project file match (probable), or disassembly. Embedded source is the compiled language of the capture (HLSL for D3D, GLSL/SPIR-V for GL/Vulkan) and already preprocessed; map changes back to the project `.shader`/`.hlsl` yourself.
 - Experiments run in the capture's own shader language. On a GL/Vulkan capture your tested edit is GLSL; a port to the project's HLSL is untested — say so.
@@ -78,6 +80,8 @@ Names: markers come from the engine (Unity: `RenderLoop.Draw`, `DrawOpaqueObject
 ## 5. Output contract
 
 Write the answer in the user's language, in two parts:
+
+**Answer the question that the data supports.** If the user's premise doesn't hold (they ask "what got slower", but the measured time went down; they expect a pass to be the culprit, but it's cheap), say that first, plainly, then give what the data does show — e.g. "measured: Bloom is 82% faster in this replay, but it now moves ~14× more bytes through pixel output (32-bit float targets + blending); on a real GPU that is the likely slowdown". Never bend the evidence to fit the premise, and never drop the risk because the ms look good.
 
 **Part 1 — Summary (short, first).** 3–6 lines a busy person reads: what is slow / what changed, how much (ms and % of frame), and the mechanism in plain words — what the GPU does too much of and why it hurts ("the new bloom writes 16-byte float pixels with blending, so each pixel is read and written twice at double width: ~6× more data out of the pixel shader for fewer instructions"). No jargon without a translation; at most one or two numbers per line.
 

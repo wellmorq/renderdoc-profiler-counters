@@ -150,7 +150,13 @@ export function findings(c) {
   const out = [];
   const soft = /software|llvmpipe|warp/i.test(c.info.vendor || '');
   const top = [...evs].sort((x, y) => c.ms(y.eid) - c.ms(x.eid));
-  for (const a of top.slice(0, 2)) if (c.ms(a.eid) >= frame * 0.25) out.push(`one ${a.kind} dominates: ${where(a)} = ${pct(c.ms(a.eid))} of the frame`);
+  const softArtifact = (a) => soft && (a.kind === 'clear' || a.kind === 'copy');
+  for (const a of top.slice(0, 2)) {
+    if (c.ms(a.eid) < frame * 0.25) continue;
+    out.push(softArtifact(a)
+      ? `${a.kind} ${where(a)} = ${pct(c.ms(a.eid))} of the frame: a software-replay artifact (clears/copies are nearly free on real GPUs) — leave it out of the bottleneck list`
+      : `one ${a.kind} dominates: ${where(a)} = ${pct(c.ms(a.eid))} of the frame`);
+  }
   const micro = draws.filter((a) => (c.get(a.eid, 'rastPrims') || 0) > 10000 && c.get(a.eid, 'ps') > 0 && c.get(a.eid, 'ps') / c.get(a.eid, 'rastPrims') < 1)
     .sort((x, y) => c.ms(y.eid) - c.ms(x.eid));
   if (micro.length) out.push(`micro-triangles: ${micro.length} draw(s), ${pct(micro.reduce((s, a) => s + c.ms(a.eid), 0))} of frame; worst ${where(micro[0])}: ${fmtNum(c.get(micro[0].eid, 'rastPrims'))} triangles for ${fmtNum(c.get(micro[0].eid, 'ps'))} pixels (LOD/mesh density)`);
@@ -171,30 +177,31 @@ export function findings(c) {
   const odShaders = shaderRanking(c, { stages: ['ps', 'cs', 'vs'] }).filter((r) => r.ms >= frame * 0.02 && isDebugCompiled(c.shaderById.get(r.id) || {}));
   if (odShaders.length) out.push(`${odShaders.length} expensive shader(s) compiled without optimisation (/Od), e.g. ${odShaders[0].id}: timings pessimistic — Unity debug pragma left on?`);
   if (soft) {
-    const cc = evs.filter((a) => (a.kind === 'clear' || a.kind === 'copy') && c.ms(a.eid) >= frame * 0.02);
+    const cc = evs.filter((a) => (a.kind === 'clear' || a.kind === 'copy') && c.ms(a.eid) >= frame * 0.02 && c.ms(a.eid) < frame * 0.25);
     for (const a of cc.slice(0, 2)) out.push(`${a.kind} ${where(a)} = ${pct(c.ms(a.eid))}: probably a software-replay artifact (cheap on real GPUs) — don't report it as a problem without a hardware capture`);
   }
   return out;
 }
 
-export function topTable(c, { n = 20, by = 'ms', within = null, kinds = ['draw', 'dispatch', 'clear', 'copy'] } = {}) {
+export function topTable(c, { n = 20, by = 'ms', within = null, kinds = ['draw', 'dispatch', 'clear', 'copy'], metrics = [] } = {}) {
   const key = by === 'ms' ? 'ms' : c.resolveMetric(by);
   let evs = within ? within : c.frameEvents();
   evs = evs.filter((a) => kinds.includes(a.kind));
+  const asked = metrics.length ? c.expandMetrics(metrics, evs).filter((m) => m !== key) : [];
   const val = (a) => (key === 'ms' ? c.ms(a.eid) : c.get(a.eid, key));
   evs = evs.filter((a) => val(a) !== null && val(a) !== undefined).sort((x, y) => val(y) - val(x)).slice(0, n);
   const frame = c.frameMs() || 0;
-  const extra = ['ps', 'verts', 'samples'].filter((k) => c.hasMetric(k) && k !== key);
+  const extra = [...new Set([...['ps', 'verts', 'samples'].filter((k) => c.hasMetric(k) && k !== key), ...asked])];
   const rows = evs.map((a) => {
     const st = c.state.get(a.eid) || {};
     const sh = st.shaders ? (st.shaders.ps ?? st.shaders.cs) : undefined;
     const vp = st.viewport ? `${Math.round(st.viewport[2])}x${Math.round(st.viewport[3])}` : '';
     const msv = c.ms(a.eid);
     return [a.eid, fmtMs(msv), frame ? fmtPct((msv / frame) * 100) : '-', ...(key !== 'ms' ? [fmtNum(val(a))] : []),
-      ...extra.map((k) => fmtNum(c.get(a.eid, k))), a.kind === 'dispatch' ? 'disp' : a.kind,
+      ...extra.map((k) => { const v = c.get(a.eid, k); return v === null || v === undefined ? '-' : fmtNum(v); }), a.kind === 'dispatch' ? 'disp' : a.kind,
       sh !== undefined ? trunc(c.shaderLabel(sh), 28) : '', vp, trunc(a.name, 34), pathStr(c, a, 60)];
   });
-  return table(['eid', 'ms', '%frame', ...(key !== 'ms' ? [shortMetric(key)] : []), ...extra, 'kind', 'ps/cs shader', 'vp', 'name', 'marker path'], rows, 'rrrrrrrlllll');
+  return table(['eid', 'ms', '%frame', ...(key !== 'ms' ? [shortMetric(key)] : []), ...extra.map(shortMetric), 'kind', 'ps/cs shader', 'vp', 'name', 'marker path'], rows, 'rrr' + (key !== 'ms' ? 'r' : '') + 'r'.repeat(extra.length) + 'lllll');
 }
 
 export function tree(c, query, opts = {}) {
@@ -224,10 +231,10 @@ export function tree(c, query, opts = {}) {
   const visit = (a, d) => {
     const isGroup = a.children > 0;
     const ag = isGroup ? c.nodeAgg(a) : { ms: c.ms(a.eid), draws: a.kind === 'draw' ? 1 : 0, dispatches: a.kind === 'dispatch' ? 1 : 0, events: [a] };
-    if (!isGroup && !WORK_KINDS.has(a.kind)) return;
+    if (!isGroup && (!WORK_KINDS.has(a.kind) || (opts.passes && d > 0))) return;
     // Unity-style "one marker per draw": print marker and its single draw on one line
     const kidsAll = isGroup ? c.kids(a).filter((k) => k.children > 0 || WORK_KINDS.has(k.kind)) : [];
-    if (isGroup && kidsAll.length === 1 && !(kidsAll[0].children > 0)) {
+    if (isGroup && kidsAll.length === 1 && !(kidsAll[0].children > 0) && !opts.passes) {
       const k = kidsAll[0];
       rows.push([fmtMs(ag.ms), frame && ag.ms !== null ? fmtPct((ag.ms / frame) * 100) : '-', ag.draws, ag.dispatches, ...fmtAgg(ag.events),
         '  '.repeat(d) + trunc(a.name, 70) + ` @${a.eid} → [${k.kind}] ${trunc(k.name, 40)} @${k.eid}`]);
@@ -236,7 +243,14 @@ export function tree(c, query, opts = {}) {
     rows.push([fmtMs(ag.ms), frame && ag.ms !== null ? fmtPct((ag.ms / frame) * 100) : '-', ag.draws, ag.dispatches, ...fmtAgg(ag.events),
       '  '.repeat(d) + (isGroup ? '' : `[${a.kind}] `) + trunc(a.name, 80) + ` @${a.eid}`]);
     if (!isGroup || d >= depth) return;
-    let kids = c.kids(a).filter((k) => k.children > 0 || WORK_KINDS.has(k.kind));
+    // --passes: drop individual events and Unity's one-marker-per-draw wrappers ("RenderLoop.Draw: X")
+    const wrapper = (k) => { const ks = c.kids(k).filter((x) => x.children > 0 || WORK_KINDS.has(x.kind)); return ks.length === 1 && !(ks[0].children > 0); };
+    const groupKids = c.kids(a).filter((k) => k.children > 0);
+    const manyWrappers = groupKids.filter(wrapper).length >= 8;
+    const perDraw = (k) => wrapper(k) && (/\.Draw\b/.test(k.name) || manyWrappers);
+    let kids = c.kids(a).filter((k) => (k.children > 0 && !(opts.passes && perDraw(k))) || (WORK_KINDS.has(k.kind) && !opts.passes));
+    const msOfK = (k) => (k.children > 0 ? c.nodeAgg(k).ms : c.ms(k.eid)) || 0;
+    if (opts.sort === 'ms') kids = [...kids].sort((x, y) => msOfK(y) - msOfK(x));
     if (minPct && frame) kids = kids.filter((k) => ((k.children > 0 ? c.nodeAgg(k).ms : c.ms(k.eid)) || 0) >= (frame * minPct) / 100);
     if (kids.length > topN) {
       const msOf = (k) => (k.children > 0 ? c.nodeAgg(k).ms : c.ms(k.eid)) || 0;
@@ -421,7 +435,7 @@ export function shaders(c, opts = {}) {
   if (!rows.length) return c.shaders.length ? 'No shaders used by measured draws in this scope.' : 'No shader data (case opened with --no-state?).';
   const out = [shaderTable(c, rows.slice(0, opts.n || 25), c.frameMs())];
   out.push('ms = summed GPU time of every draw/dispatch using the shader; a draw counts for each of its stages, so do not add ps+vs rows.');
-  out.push('threads = ps or cs invocations; static = disassembly text stats (instr slots for DXBC, else non-comment lines); source: yes = embedded, /Od = compiled without optimisation.');
+  out.push('threads = ps or cs invocations (0 for a ps = depth-only/shadow use, the pixel stage did not run); static = disassembly text stats (instr slots for DXBC, else non-comment lines); source: yes = embedded, /Od = compiled without optimisation.');
   return out.join('\n');
 }
 

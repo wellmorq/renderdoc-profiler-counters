@@ -6,6 +6,7 @@ import { runJob, sessionAlive, startSession, stopSession, taskResult } from './r
 import { chooseHost } from './env.mjs';
 import { closeDaemon, ensureDaemon, liveSession, sessionName } from './rdc.mjs';
 
+const fmtNumInt = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e4 ? `${(n / 1e3).toFixed(1)}k` : String(Math.round(n)));
 const stamp = () => new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 
 function requireWork(c, eid) {
@@ -51,6 +52,30 @@ function flattenVars(vars, prefix = '', out = [], maxArray = 8) {
   return out;
 }
 
+function shaderText(c, id) {
+  const meta = c.shaderById.get(id);
+  if (!meta?.sourceDir) return null;
+  let text = '';
+  for (const f of meta.sourceFiles || []) { try { text += fs.readFileSync(path.join(c.dir, 'shaders', meta.sourceDir, f), 'utf8') + '\n'; } catch { /* ignore */ } }
+  return text.split('\n').filter((l) => !/\b(uniform|cbuffer|CBUFFER_START|layout\s*\()/i.test(l));
+}
+
+// Source lines where a loop bound uses the constant `name`, directly or through one assignment.
+function loopLines(lines, name) {
+  if (!lines || name.length < 3) return [];
+  const esc = name.replace(/[$]/g, '\\$');
+  const loopRe = /\b(for|while)\s*\(/;
+  const hits = lines.filter((l) => loopRe.test(l) && new RegExp(`\\b${esc}\\b`).test(l)).map((l) => l.trim());
+  if (hits.length) return hits;
+  for (const l of lines) {
+    const m = l.match(new RegExp(`(\\w+)\\s*=[^;=]*\\b${esc}\\b`));
+    if (!m) continue;
+    const loops = lines.filter((x) => loopRe.test(x) && new RegExp(`\\b${m[1]}\\b`).test(x)).map((x) => x.trim());
+    if (loops.length) return loops.map((x) => `${l.trim()}  …  ${x}`);
+  }
+  return [];
+}
+
 async function drawJson(c, eid, opts) {
   requireWork(c, eid);
   const { res, dir } = await job(c, `draw${eid}`, [{ type: 'draw', eid, file: 'draw.json' }], opts);
@@ -72,6 +97,25 @@ export async function draw(c, eid, opts) {
       if (vars.length > 80 && !opts.all) out.push(`    … ${vars.length - 80} more (--all)`);
     }
   }
+  // constants that bound loops: the per-pixel/per-vertex iteration count lives in the cbuffer, not in the code
+  const loops = [];
+  for (const [stage, s] of Object.entries(d.stages)) {
+    const lines = shaderText(c, s.id);
+    if (!lines) continue;
+    for (const cb of s.cbuffers || []) {
+      for (const [n, v] of flattenVars(cb.vars, '', [], 0)) {
+        if (/\[\d+\]/.test(n) || /[(,]/.test(v)) continue;
+        const name = n.split('.').pop();
+        const hits = loopLines(lines, name);
+        if (!hits.length) continue;
+        const num = Number(v);
+        const nLoops = hits.reduce((t, h) => t + (h.split('  …  ').pop().match(/\b(for|while)\s*\(/g) || []).length, 0);
+        const nest = nLoops > 1 && Number.isFinite(num) ? `; ${nLoops} loops use it → if nested, ~${num}^${nLoops} = ${fmtNumInt(num ** nLoops)} iterations per ${stage === 'vs' ? 'vertex' : stage === 'cs' ? 'thread' : 'pixel'}` : '';
+        loops.push(`  ${stage} ${name} = ${v}${nest}`, ...hits.slice(0, 2).map((h) => `      ${trunc(h, 130)}`));
+      }
+    }
+  }
+  if (loops.length) out.push('LOOP BOUNDS FROM CONSTANTS (iteration count = cost per pixel/vertex; change it in the material/script, or test with `experiment`):', ...loops);
   if (d.rts?.length) out.push(`render targets: ${d.rts.map((t) => `${t.id} ${t.name || ''} ${t.w}x${t.h} ${t.fmt}`).join(' | ')}`);
   if (d.depthTarget) out.push(`depth: ${d.depthTarget.id} ${d.depthTarget.name || ''} ${d.depthTarget.w}x${d.depthTarget.h} ${d.depthTarget.fmt}`);
   out.push(`raw json: ${file}`);
@@ -120,27 +164,13 @@ export async function drawdiff(a, b, eidA, eidB, opts) {
   // changed constants that drive loops in the shader source are the usual cause of cost changes
   const loopHints = [];
   for (const [stage, s] of Object.entries(y.d.stages || {})) {
-    const meta = b.shaderById.get(s.id);
-    if (!meta?.sourceDir) continue;
-    let text = '';
-    for (const f of meta.sourceFiles || []) { try { text += fs.readFileSync(path.join(b.dir, 'shaders', meta.sourceDir, f), 'utf8') + '\n'; } catch { /* ignore */ } }
-    const lines = text.split('\n').filter((l) => !/\b(uniform|cbuffer|CBUFFER_START|layout\s*\()/i.test(l));
+    const lines = shaderText(b, s.id);
+    if (!lines) continue;
     for (const [k] of scalar) {
       const name = k.split('.').pop().replace(/\[.*$/, '');
-      if (!k.startsWith(stage + '.') || name.length < 3) continue;
-      const esc = name.replace(/[$]/g, '\\$');
-      const loopRe = /\b(for|while)\s*\(/;
-      let hit = lines.find((l) => loopRe.test(l) && new RegExp(`\\b${esc}\\b`).test(l));
-      if (!hit) {
-        // indirect: v = f(name); ... for(... v ...)
-        for (const l of lines) {
-          const m = l.match(new RegExp(`(\\w+)\\s*=[^;=]*\\b${esc}\\b`));
-          if (!m) continue;
-          const loop = lines.find((x) => loopRe.test(x) && new RegExp(`\\b${m[1]}\\b`).test(x));
-          if (loop) { hit = `${l.trim()}  …  ${loop.trim()}`; break; }
-        }
-      }
-      if (hit) loopHints.push(`  ${stage} ${name}: ${trunc(hit.trim(), 140)}`);
+      if (!k.startsWith(stage + '.')) continue;
+      const hit = loopLines(lines, name)[0];
+      if (hit) loopHints.push(`  ${stage} ${name}: ${trunc(hit, 140)}`);
     }
   }
   const out = [`A EID ${eidA} ${x.d.name} | B EID ${eidB} ${y.d.name}`];

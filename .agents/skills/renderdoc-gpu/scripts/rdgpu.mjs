@@ -29,8 +29,9 @@ PREPARE (replays the .rdc once into a working cache; later queries are instant)
 
 QUERY (offline, instant)
   summary <rdc>                       frame overview, top passes/events/shaders
-  tree <rdc> [marker|eid|.] [--depth N] [--top N] [--min-pct P] [--metrics a,b|@work|@memory|@stalls|@inst|@cost]
-  top <rdc> [--by <metric>] [--in <marker|eid>] [--kind draw,dispatch] [-n N]
+  tree <rdc> [marker|eid|.] [--depth N] [--top N] [--min-pct P] [--passes] [--sort ms] [--metrics a,b|@work|@memory|@stalls|@inst|@bytes|@cost]
+                                      --passes: markers only (no individual draws); --sort ms: heaviest first
+  top <rdc> [--by <metric>] [--in <marker|eid>] [--kind draw,dispatch] [--metrics a,b|@bytes] [-n N]
   event <rdc> <eid>                   counters, derived ratios, pipeline state, bound textures
   shaders <rdc> [--stage ps,cs] [--in <marker>] [-n N]
   shader <rdc> <shader-id> [--src [--grep re [-C N]]]   reflection, flags, users; --src prints embedded source (or disassembly)
@@ -101,6 +102,8 @@ const OPTIONS = {
   'rdc-source': { type: 'string' },
   idle: { type: 'string' },
   grep: { type: 'string' },
+  passes: { type: 'boolean' },
+  sort: { type: 'string' },
   context: { type: 'string', short: 'C' },
   resource: { type: 'string' },
   verbose: { type: 'boolean' },
@@ -170,7 +173,7 @@ async function main() {
     case 'tree': {
       need(1, '<capture> [marker|eid]');
       const c = loadCase(args[0]);
-      out(q.tree(c, args[1], { depth: num(o.depth, 2), top: num(o.top, 12), minPct: num(o['min-pct'], 0), metrics: o.metrics ? o.metrics.split(',') : [] }));
+      out(q.tree(c, args[1], { depth: num(o.depth, 2), top: num(o.top, 12), minPct: num(o['min-pct'], 0), metrics: o.metrics ? o.metrics.split(',') : [], passes: o.passes, sort: o.sort }));
       return;
     }
     case 'top': {
@@ -178,7 +181,7 @@ async function main() {
       const c = loadCase(args[0]);
       const within = o.in ? c.findNodes(o.in).flatMap((n) => c.workUnder(n)) : null;
       if (o.in && !within.length) throw new Error(`No marker/event matches "${o.in}"`);
-      out(q.topTable(c, { n: num(o.n, 20), by: o.by || 'ms', within, kinds: o.kind ? o.kind.split(',') : undefined }));
+      out(q.topTable(c, { n: num(o.n, 20), by: o.by || 'ms', within, kinds: o.kind ? o.kind.split(',') : undefined, metrics: o.metrics ? o.metrics.split(',') : [] }));
       return;
     }
     case 'event': need(2, '<capture> <eid>'); out(q.event(loadCase(args[0]), Number(args[1]))); return;
