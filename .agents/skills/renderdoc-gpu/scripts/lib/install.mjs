@@ -67,7 +67,7 @@ export function install(opts = {}) {
     }
     step('ok', `Visual Studio C++ tools: ${vs}`);
   } else {
-    const missing = ['cmake', 'ninja', 'g++', 'bison', 'autoconf', 'automake', 'libtool', 'pkg-config'].filter((t) => !which(t));
+    const missing = ['cmake', 'ninja', 'g++', 'bison', 'autoconf', 'automake', 'libtoolize', 'pkg-config'].filter((t) => !which(t));
     if (missing.length) return fail(`missing build tools: ${missing.join(', ')} (Debian/Ubuntu: sudo apt install cmake ninja-build g++ bison autoconf automake libtool pkg-config python3-dev libx11-dev libx11-xcb-dev libxcb-keysyms1-dev libgl-dev)`);
     step('ok', 'build tools');
   }
