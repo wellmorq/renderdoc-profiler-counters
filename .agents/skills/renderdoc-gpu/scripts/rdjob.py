@@ -144,6 +144,7 @@ class Ctx(object):
         self.out = out
         self.sdfile = safe(controller.GetStructuredFile)
         self._catalog = None
+        self._counter_objs = {}
         self._names = None
         self._actions = None
 
@@ -176,6 +177,7 @@ class Ctx(object):
             cat = []
             for ctr in self.c.EnumerateCounters():
                 d = self.c.DescribeCounter(ctr)
+                self._counter_objs[int(ctr)] = ctr
                 cat.append({
                     "id": int(ctr),
                     "name": d.name,
@@ -433,14 +435,13 @@ def resolve_counters(ctx, names):
 
 def fetch(ctx, descs, chunk):
     """Fetch counters, chunked. Returns {eid: {name: value}}."""
-    rd = ctx.rd
     data = {}
     for i in range(0, len(descs), chunk):
         part = descs[i:i + chunk]
         log("fetching counters %d-%d of %d (%s%s)" % (i + 1, i + len(part), len(descs), part[0]["name"],
                                                       ", ..." if len(part) > 1 else ""))
         t = time.time()
-        results = ctx.c.FetchCounters([rd.GPUCounter(x["id"]) for x in part])
+        results = ctx.c.FetchCounters([ctx._counter_objs[x["id"]] for x in part])
         by_id = dict((x["id"], x) for x in part)
         for r in results:
             d = by_id.get(int(r.counter))
